@@ -1,6 +1,7 @@
 package cn.har01d.alist_tvbox.web;
 
 import cn.har01d.alist_tvbox.entity.Plugin;
+import cn.har01d.alist_tvbox.service.PluginCompilerService;
 import cn.har01d.alist_tvbox.service.PluginService;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -18,6 +19,7 @@ import java.util.List;
 @RequestMapping("/api/plugins")
 public class PluginController {
     private final PluginService pluginService;
+    private final PluginCompilerService pluginCompilerService;
 
     private record PluginImportRequest(String url) {
     }
@@ -25,8 +27,9 @@ public class PluginController {
     private record PluginBatchDeleteRequest(List<Integer> ids) {
     }
 
-    public PluginController(PluginService pluginService) {
+    public PluginController(PluginService pluginService, PluginCompilerService pluginCompilerService) {
         this.pluginService = pluginService;
+        this.pluginCompilerService = pluginCompilerService;
     }
 
     @GetMapping
@@ -44,6 +47,11 @@ public class PluginController {
     @PostMapping("/import")
     public PluginService.ImportResult importPlugins(@RequestBody PluginImportRequest request) {
         return pluginService.importFromSource(request.url());
+    }
+
+    @PostMapping("/compile/secspider")
+    public PluginCompilerService.CompileResponse compileSecspider(@RequestBody PluginCompilerService.CompileRequest request) {
+        return pluginCompilerService.compileSecspider(request);
     }
 
     @PutMapping("/{id}")

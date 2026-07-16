@@ -338,6 +338,7 @@
           <el-button type="primary" :loading="importingPlugins" :disabled="!pluginImportForm.url.trim()" @click="importPlugins">
             导入仓库
           </el-button>
+          <el-button @click="openPluginCompiler">三方插件编译</el-button>
         </el-form-item>
       </el-form>
       <el-progress v-if="importingPlugins" :percentage="100" :indeterminate="true" :duration="5"/>
@@ -586,6 +587,131 @@
         <span class="dialog-footer">
           <el-button @click="sourceExtendVisible = false">取消</el-button>
           <el-button type="primary" @click="saveSourceExtend">保存配置</el-button>
+        </span>
+      </template>
+    </el-dialog>
+
+    <el-dialog v-model="pluginCompilerVisible" title="三方插件编译" width="960px" destroy-on-close>
+      <el-collapse class="plugin-compiler-guide">
+        <el-collapse-item name="usage">
+          <template #title>
+            <span>使用说明与示例</span>
+          </template>
+          <div class="plugin-compiler-guide-body">
+            <ol>
+              <li>准备自有 Ed25519 密钥对和 master secret，把 Python 明文插件粘贴到“插件明文”。内层明文必须是合法 Python，不要写外层 <code>//@name</code> 这类包头。</li>
+              <li>粘贴私钥和 master secret 后点击“编译”。私钥只参与本次签名，后端不会保存或回显。</li>
+              <li>把“插件包”保存到插件仓库文件，例如 <code>py/javbus_self.txt</code>，再在仓库 <code>spiders_v2.json</code> 中引用它。</li>
+              <li>把“Atvp chunks”复制到自有 <code>Atvp.py</code> 的 <code>_self_public_key_chunks</code> 和 <code>_self_master_secret_chunks</code>，重新生成订阅后测试。</li>
+              <li>需要强制只走自有 keyring 时，可在站点扩展配置里设置 <code>secspider_loader: self</code>；默认 <code>auto</code> 会先试原版再试自有。</li>
+            </ol>
+            <div class="plugin-compiler-example-grid">
+              <div>
+                <div class="plugin-compiler-example-title">明文插件示例</div>
+                <pre class="plugin-compiler-example">from base.spider import Spider
+
+class Spider(Spider):
+    def getName(self):
+        return "Demo"
+
+    def playerContent(self, flag, id, vipFlags):
+        return {"parse": 0, "url": id}</pre>
+              </div>
+              <div>
+                <div class="plugin-compiler-example-title">spiders_v2.json 示例</div>
+                <pre class="plugin-compiler-example">[
+  {
+    "id": "javbus_self",
+    "file": "py/javbus_self.txt",
+    "version": 1,
+    "valid": true
+  }
+]</pre>
+              </div>
+            </div>
+          </div>
+        </el-collapse-item>
+      </el-collapse>
+      <el-form :model="pluginCompilerForm" label-width="120px">
+        <el-form-item label="插件名称" required>
+          <el-input v-model="pluginCompilerForm.name" placeholder="例如 JavBus"/>
+        </el-form-item>
+        <el-form-item label="插件版本" required>
+          <el-input-number v-model="pluginCompilerForm.version" :min="1" :step="1"/>
+        </el-form-item>
+        <el-form-item label="插件 ID">
+          <el-input v-model="pluginCompilerForm.id" placeholder="稳定 id，可留空"/>
+        </el-form-item>
+        <el-form-item label="kid">
+          <el-input v-model="pluginCompilerForm.kid" placeholder="例如 self-20260716"/>
+        </el-form-item>
+        <el-form-item label="remark">
+          <el-input v-model="pluginCompilerForm.remark" placeholder="可留空"/>
+        </el-form-item>
+        <el-form-item label="插件明文" required>
+          <el-input
+            v-model="pluginCompilerForm.source"
+            type="textarea"
+            :rows="9"
+            placeholder="粘贴 Python 明文插件源码"
+          />
+        </el-form-item>
+        <el-form-item label="Ed25519 私钥" required>
+          <el-input
+            v-model="pluginCompilerForm.privateKey"
+            type="textarea"
+            :rows="4"
+            show-password
+            placeholder="PKCS8 PEM/base64，或 32 字节 raw seed 的 base64/hex"
+          />
+        </el-form-item>
+        <el-form-item label="Ed25519 公钥">
+          <el-input
+            v-model="pluginCompilerForm.publicKey"
+            type="textarea"
+            :rows="3"
+            placeholder="可选。填写后返回 _self_public_key_chunks"
+          />
+        </el-form-item>
+        <el-form-item label="master secret" required>
+          <el-input
+            v-model="pluginCompilerForm.masterSecret"
+            type="textarea"
+            :rows="2"
+            show-password
+            placeholder="自有 Atvp.py 中使用的 master secret"
+          />
+        </el-form-item>
+      </el-form>
+      <el-alert
+        title="私钥只随本次请求发送到后端参与签名，接口不会保存或回显私钥。生成包只适用于填入匹配公钥和 master secret 的自有 Atvp.py。"
+        type="warning"
+        show-icon
+        :closable="false"
+        style="margin-bottom: 12px"
+      />
+      <div v-if="pluginCompilerResult">
+        <el-descriptions :column="3" border size="small" style="margin-bottom: 12px">
+          <el-descriptions-item label="格式">{{ pluginCompilerResult.format }}</el-descriptions-item>
+          <el-descriptions-item label="kid">{{ pluginCompilerResult.kid }}</el-descriptions-item>
+          <el-descriptions-item label="大小">{{ pluginCompilerResult.packageSize }}</el-descriptions-item>
+          <el-descriptions-item label="明文 SHA256" :span="3">{{ pluginCompilerResult.plainSha256 }}</el-descriptions-item>
+        </el-descriptions>
+        <el-tabs v-model="pluginCompilerResultTab">
+          <el-tab-pane label="插件包" name="package">
+            <el-input v-model="pluginCompilerResult.packageText" type="textarea" :rows="10"/>
+            <el-button style="margin-top: 8px" @click="copyUrl(pluginCompilerResult.packageText)">复制插件包</el-button>
+          </el-tab-pane>
+          <el-tab-pane label="Atvp chunks" name="chunks">
+            <el-input :model-value="pluginCompilerChunksText" type="textarea" :rows="10" readonly/>
+            <el-button style="margin-top: 8px" @click="copyUrl(pluginCompilerChunksText)">复制 chunks</el-button>
+          </el-tab-pane>
+        </el-tabs>
+      </div>
+      <template #footer>
+        <span class="dialog-footer">
+          <el-button @click="pluginCompilerVisible = false">关闭</el-button>
+          <el-button type="primary" :loading="pluginCompiling" @click="compilePlugin">编译</el-button>
         </span>
       </template>
     </el-dialog>
@@ -972,6 +1098,31 @@ interface PluginFilterExtraEntry {
   value: string
 }
 
+interface PluginCompileForm {
+  name: string
+  version: number
+  remark: string
+  id: string
+  kid: string
+  source: string
+  privateKey: string
+  publicKey: string
+  masterSecret: string
+}
+
+interface PluginCompileResult {
+  packageText: string
+  plainSha256: string
+  packageSize: number
+  format: string
+  alg: string
+  wrap: string
+  sign: string
+  kid: string
+  publicKeyChunks: string[]
+  masterSecretChunks: string[]
+}
+
 const PLUGIN_REPO_URL_KEY = 'plugin_repo_url'
 const currentUrl = window.location.origin
 const filterStageOptions = [
@@ -1041,10 +1192,12 @@ const rawJsonData = computed(() => JSON.stringify(jsonData.value, null, 2))
 const formVisible = ref(false)
 const dialogVisible = ref(false)
 const pluginVisible = ref(false)
+const pluginCompilerVisible = ref(false)
 const pluginFilterVisible = ref(false)
 const pluginFilterConfigVisible = ref(false)
 const sourceExtendVisible = ref(false)
 const importingPlugins = ref(false)
+const pluginCompiling = ref(false)
 const tgVisible = ref(false)
 const scanVisible = ref(false)
 const confirm = ref(false)
@@ -1161,6 +1314,27 @@ const pluginForm = ref<Plugin>({
 })
 const pluginImportForm = ref({
   url: localStorage.getItem(PLUGIN_REPO_URL_KEY) || ''
+})
+const pluginCompilerForm = ref<PluginCompileForm>({
+  name: '',
+  version: 1,
+  remark: '',
+  id: '',
+  kid: 'self',
+  source: '',
+  privateKey: '',
+  publicKey: '',
+  masterSecret: ''
+})
+const pluginCompilerResult = ref<PluginCompileResult | null>(null)
+const pluginCompilerResultTab = ref('package')
+const pluginCompilerChunksText = computed(() => {
+  if (!pluginCompilerResult.value) {
+    return ''
+  }
+  const publicKeyChunks = JSON.stringify(pluginCompilerResult.value.publicKeyChunks || [], null, 2)
+  const masterSecretChunks = JSON.stringify(pluginCompilerResult.value.masterSecretChunks || [], null, 2)
+  return `_self_public_key_chunks = ${publicKeyChunks}\n_self_master_secret_chunks = ${masterSecretChunks}`
 })
 const pluginSettingsForm = ref({
   githubProxy: '',
@@ -1308,6 +1482,22 @@ const resetPluginForm = () => {
     lastCheckedAt: '',
     lastError: ''
   }
+}
+
+const resetPluginCompilerForm = () => {
+  pluginCompilerForm.value = {
+    name: '',
+    version: 1,
+    remark: '',
+    id: '',
+    kid: 'self',
+    source: '',
+    privateKey: '',
+    publicKey: '',
+    masterSecret: ''
+  }
+  pluginCompilerResult.value = null
+  pluginCompilerResultTab.value = 'package'
 }
 
 const parsePluginFilterStages = (value: string) => {
@@ -2395,6 +2585,11 @@ const showPlugins = () => {
   loadPluginSettings()
 }
 
+const openPluginCompiler = () => {
+  resetPluginCompilerForm()
+  pluginCompilerVisible.value = true
+}
+
 const showPluginFilters = () => {
   pluginFilterVisible.value = true
   resetPluginFilterForm()
@@ -2440,6 +2635,46 @@ const importPlugins = async () => {
     loadManagedSources()
   } finally {
     importingPlugins.value = false
+  }
+}
+
+const compilePlugin = async () => {
+  const form = pluginCompilerForm.value
+  if (!form.name.trim()) {
+    ElMessage.warning('请输入插件名称')
+    return
+  }
+  if (!form.source.trim()) {
+    ElMessage.warning('请粘贴插件明文')
+    return
+  }
+  if (!form.privateKey.trim()) {
+    ElMessage.warning('请粘贴 Ed25519 私钥')
+    return
+  }
+  if (!form.masterSecret.trim()) {
+    ElMessage.warning('请填写 master secret')
+    return
+  }
+
+  pluginCompiling.value = true
+  try {
+    const {data} = await axios.post('/api/plugins/compile/secspider', {
+      name: form.name.trim(),
+      version: form.version,
+      remark: form.remark,
+      id: form.id.trim(),
+      kid: form.kid.trim(),
+      source: form.source,
+      privateKey: form.privateKey,
+      publicKey: form.publicKey,
+      masterSecret: form.masterSecret
+    })
+    pluginCompilerResult.value = data
+    pluginCompilerResultTab.value = 'package'
+    ElMessage.success('编译完成')
+  } finally {
+    pluginCompiling.value = false
   }
 }
 
@@ -2871,6 +3106,49 @@ onUnmounted(() => {
 .filter-config-extra-empty {
   color: var(--el-text-color-secondary);
   font-size: 13px;
+}
+
+.plugin-compiler-guide {
+  margin-bottom: 14px;
+}
+
+.plugin-compiler-guide-body {
+  color: var(--el-text-color-regular);
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.plugin-compiler-guide-body ol {
+  margin: 0 0 12px 20px;
+  padding: 0;
+}
+
+.plugin-compiler-example-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.plugin-compiler-example-title {
+  color: var(--el-text-color-primary);
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+
+.plugin-compiler-example {
+  background: var(--el-fill-color-light);
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 6px;
+  margin: 0;
+  overflow: auto;
+  padding: 10px;
+  white-space: pre-wrap;
+}
+
+@media (max-width: 900px) {
+  .plugin-compiler-example-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 .json pre {

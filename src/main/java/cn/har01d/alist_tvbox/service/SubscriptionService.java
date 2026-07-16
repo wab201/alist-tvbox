@@ -1445,7 +1445,7 @@ public class SubscriptionService {
 
         Map<String, Object> map = new HashMap<>();
         map.put("api", url);
-        //map.put("loader", url + "/Atvp.py");
+        map.put("loader", url + "/Atvp.py");
         String source = readHostAddress("") + "/plugins/" + getCurrentOrFirstToken() + "/" + plugin.getId() + ".txt";
         map.put("source", source);
         map.put("token", token.isBlank() ? "-" : token);
