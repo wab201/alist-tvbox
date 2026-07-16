@@ -13,11 +13,13 @@ import java.nio.charset.StandardCharsets;
 import java.security.KeyFactory;
 import java.security.MessageDigest;
 import java.security.PrivateKey;
+import java.security.PublicKey;
 import java.security.SecureRandom;
 import java.security.Signature;
 import java.security.spec.EdECPrivateKeySpec;
 import java.security.spec.NamedParameterSpec;
 import java.security.spec.PKCS8EncodedKeySpec;
+import java.security.spec.X509EncodedKeySpec;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.HexFormat;
@@ -41,6 +43,7 @@ public class PluginCompilerService {
             byte[] sourceBytes = request.source().getBytes(StandardCharsets.UTF_8);
             byte[] masterSecret = request.masterSecret().getBytes(StandardCharsets.UTF_8);
             PrivateKey privateKey = parseEd25519PrivateKey(request.privateKey());
+            PublicKey publicKey = StringUtils.isBlank(request.publicKey()) ? null : parseEd25519PublicKey(request.publicKey());
 
             byte[] contentKey = randomBytes(32);
             byte[] payloadNonce = randomBytes(12);
@@ -69,12 +72,16 @@ public class PluginCompilerService {
                     "sha256:" + sourceHash
             );
 
-            byte[] signature = signEd25519(privateKey, buildSigningBytes(headers, payloadB64));
+            byte[] signingBytes = buildSigningBytes(headers, payloadB64);
+            byte[] signature = signEd25519(privateKey, signingBytes);
+            if (publicKey != null && !verifyEd25519(publicKey, signingBytes, signature)) {
+                throw new BadRequestException("Ed25519 公钥与私钥不匹配");
+            }
             String packageText = buildPackageText(headers, "base64:" + Base64.getEncoder().encodeToString(signature), payloadB64);
 
-            List<String> publicKeyChunks = StringUtils.isBlank(request.publicKey())
+            List<String> publicKeyChunks = publicKey == null
                     ? List.of()
-                    : obfuscateText(request.publicKey(), PUBLIC_KEY_XOR, 16);
+                    : obfuscateText(toPem("PUBLIC KEY", publicKey.getEncoded()), PUBLIC_KEY_XOR, 16);
             List<String> masterSecretChunks = obfuscateText(request.masterSecret(), MASTER_SECRET_XOR, 16);
 
             return new CompileResponse(
@@ -103,9 +110,13 @@ public class PluginCompilerService {
         if (StringUtils.isBlank(request.name())) {
             throw new BadRequestException("插件名称不能为空");
         }
+        validateHeaderValue("插件名称", request.name());
         if (request.version() == null || request.version() < 1) {
             throw new BadRequestException("插件版本必须大于 0");
         }
+        validateHeaderValue("remark", request.remark());
+        validateHeaderValue("插件 ID", request.id());
+        validateHeaderValue("kid", request.kid());
         if (StringUtils.isBlank(request.source())) {
             throw new BadRequestException("插件明文不能为空");
         }
@@ -114,6 +125,12 @@ public class PluginCompilerService {
         }
         if (StringUtils.isBlank(request.masterSecret())) {
             throw new BadRequestException("master secret 不能为空");
+        }
+    }
+
+    private void validateHeaderValue(String label, String value) {
+        if (value != null && (value.contains("\n") || value.contains("\r"))) {
+            throw new BadRequestException(label + "不能包含换行");
         }
     }
 
@@ -136,6 +153,15 @@ public class PluginCompilerService {
         }
     }
 
+    private PublicKey parseEd25519PublicKey(String input) throws Exception {
+        byte[] keyBytes = decodeKeyMaterial(input);
+        try {
+            return KeyFactory.getInstance("Ed25519").generatePublic(new X509EncodedKeySpec(keyBytes));
+        } catch (Exception e) {
+            throw new BadRequestException("Ed25519 公钥需为 X509 PEM/base64", e);
+        }
+    }
+
     private byte[] decodeKeyMaterial(String input) {
         String value = StringUtils.trimToEmpty(input);
         if (value.contains("-----BEGIN")) {
@@ -149,6 +175,12 @@ public class PluginCompilerService {
             return HexFormat.of().parseHex(compact);
         }
         return Base64.getDecoder().decode(compact);
+    }
+
+    private String toPem(String type, byte[] bytes) {
+        return "-----BEGIN " + type + "-----\n"
+                + Base64.getMimeEncoder(64, "\n".getBytes(StandardCharsets.UTF_8)).encodeToString(bytes)
+                + "\n-----END " + type + "-----";
     }
 
     private byte[] aesGcmEncrypt(byte[] key, byte[] nonce, byte[] plaintext) throws Exception {
@@ -189,6 +221,13 @@ public class PluginCompilerService {
         signature.initSign(privateKey);
         signature.update(data);
         return signature.sign();
+    }
+
+    private boolean verifyEd25519(PublicKey publicKey, byte[] data, byte[] signatureBytes) throws Exception {
+        Signature signature = Signature.getInstance("Ed25519");
+        signature.initVerify(publicKey);
+        signature.update(data);
+        return signature.verify(signatureBytes);
     }
 
     private byte[] buildSigningBytes(SecspiderHeaders headers, String payloadB64) {

@@ -463,10 +463,10 @@ class Spider(HostSpider):
         master_secret = self._deobfuscate_chunks(secret_chunks, secret_xor).encode("utf-8")
         try:
             self._verify_signature(headers, payload_b64, public_key_text)
-        except ImportError:
-            self.log(
-                f"Atvp: Crypto.Signature.eddsa unavailable, skip secspider signature verification for {loader_name}"
-            )
+        except ImportError as e:
+            raise RuntimeError(
+                f"Atvp secspider signature verification unavailable for {loader_name}"
+            ) from e
         wrap_key = HKDF(
             master=master_secret,
             key_len=32,

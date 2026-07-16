@@ -1,5 +1,6 @@
 package cn.har01d.alist_tvbox.service;
 
+import cn.har01d.alist_tvbox.exception.BadRequestException;
 import org.junit.jupiter.api.Test;
 
 import javax.crypto.Cipher;
@@ -10,24 +11,28 @@ import java.nio.charset.StandardCharsets;
 import java.security.KeyPair;
 import java.security.KeyPairGenerator;
 import java.security.MessageDigest;
+import java.security.SecureRandom;
 import java.security.Signature;
 import java.security.spec.NamedParameterSpec;
+import java.util.ArrayList;
 import java.util.Base64;
 import java.util.HashMap;
 import java.util.HexFormat;
+import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class PluginCompilerServiceTest {
+    private static final int PUBLIC_KEY_XOR = 23;
+    private static final int MASTER_SECRET_XOR = 41;
 
     private final PluginCompilerService service = new PluginCompilerService();
 
     @Test
     void compileSecspiderShouldSignEncryptAndReturnKeyringChunks() throws Exception {
-        KeyPairGenerator generator = KeyPairGenerator.getInstance("Ed25519");
-        generator.initialize(NamedParameterSpec.ED25519);
-        KeyPair keyPair = generator.generateKeyPair();
+        KeyPair keyPair = generateKeyPair();
 
         String privateKey = pem("PRIVATE KEY", keyPair.getPrivate().getEncoded());
         String publicKey = pem("PUBLIC KEY", keyPair.getPublic().getEncoded());
@@ -80,6 +85,104 @@ class PluginCompilerServiceTest {
         );
 
         assertThat(new String(plaintext, StandardCharsets.UTF_8)).isEqualTo(source);
+        assertThat(deobfuscate(response.publicKeyChunks(), PUBLIC_KEY_XOR)).contains("-----BEGIN PUBLIC KEY-----");
+        assertThat(deobfuscate(response.masterSecretChunks(), MASTER_SECRET_XOR)).isEqualTo(masterSecret);
+    }
+
+    @Test
+    void compileSecspiderShouldNormalizeBase64DerPublicKeyChunks() throws Exception {
+        KeyPair keyPair = generateKeyPair();
+        String publicKeyBase64 = Base64.getEncoder().encodeToString(keyPair.getPublic().getEncoded());
+
+        PluginCompilerService.CompileResponse response = service.compileSecspider(
+                new PluginCompilerService.CompileRequest(
+                        "SelfPlugin",
+                        1,
+                        "",
+                        "self-plugin-id",
+                        "self-kid",
+                        "from base.spider import Spider\n\nclass Spider(Spider):\n    pass\n",
+                        pem("PRIVATE KEY", keyPair.getPrivate().getEncoded()),
+                        publicKeyBase64,
+                        "self-master-secret-for-test"
+                )
+        );
+
+        String restoredPublicKey = deobfuscate(response.publicKeyChunks(), PUBLIC_KEY_XOR);
+        assertThat(restoredPublicKey).startsWith("-----BEGIN PUBLIC KEY-----");
+        assertThat(restoredPublicKey).endsWith("-----END PUBLIC KEY-----");
+    }
+
+    @Test
+    void compileSecspiderShouldRejectMismatchedPublicKey() throws Exception {
+        KeyPair signingKey = generateKeyPair();
+        KeyPair wrongKey = generateKeyPair();
+
+        assertThatThrownBy(() -> service.compileSecspider(
+                new PluginCompilerService.CompileRequest(
+                        "SelfPlugin",
+                        1,
+                        "",
+                        "self-plugin-id",
+                        "self-kid",
+                        "from base.spider import Spider\n\nclass Spider(Spider):\n    pass\n",
+                        pem("PRIVATE KEY", signingKey.getPrivate().getEncoded()),
+                        pem("PUBLIC KEY", wrongKey.getPublic().getEncoded()),
+                        "self-master-secret-for-test"
+                )
+        ))
+                .isInstanceOf(BadRequestException.class)
+                .hasMessageContaining("公钥与私钥不匹配");
+    }
+
+    @Test
+    void compileSecspiderShouldRejectHeaderInjection() throws Exception {
+        KeyPair keyPair = generateKeyPair();
+
+        assertThatThrownBy(() -> service.compileSecspider(
+                new PluginCompilerService.CompileRequest(
+                        "SelfPlugin\n//@format:plain",
+                        1,
+                        "",
+                        "self-plugin-id",
+                        "self-kid",
+                        "from base.spider import Spider\n\nclass Spider(Spider):\n    pass\n",
+                        pem("PRIVATE KEY", keyPair.getPrivate().getEncoded()),
+                        pem("PUBLIC KEY", keyPair.getPublic().getEncoded()),
+                        "self-master-secret-for-test"
+                )
+        ))
+                .isInstanceOf(BadRequestException.class)
+                .hasMessageContaining("不能包含换行");
+    }
+
+    @Test
+    void compileSecspiderShouldAcceptRawSeedPrivateKey() {
+        byte[] seed = new byte[32];
+        new SecureRandom().nextBytes(seed);
+
+        PluginCompilerService.CompileResponse response = service.compileSecspider(
+                new PluginCompilerService.CompileRequest(
+                        "SeedPlugin",
+                        1,
+                        "",
+                        "seed-plugin-id",
+                        "seed-kid",
+                        "from base.spider import Spider\n\nclass Spider(Spider):\n    pass\n",
+                        HexFormat.of().formatHex(seed),
+                        "",
+                        "self-master-secret-for-test"
+                )
+        );
+
+        assertThat(response.packageText()).contains("//@sig:base64:");
+        assertThat(response.publicKeyChunks()).isEmpty();
+    }
+
+    private KeyPair generateKeyPair() throws Exception {
+        KeyPairGenerator generator = KeyPairGenerator.getInstance("Ed25519");
+        generator.initialize(NamedParameterSpec.ED25519);
+        return generator.generateKeyPair();
     }
 
     private String pem(String type, byte[] bytes) {
@@ -173,5 +276,24 @@ class PluginCompilerServiceTest {
 
     private String stripPrefix(String text, String prefix) {
         return text != null && text.startsWith(prefix) ? text.substring(prefix.length()) : text;
+    }
+
+    private String deobfuscate(List<String> chunks, int xorKey) {
+        List<byte[]> decoded = new ArrayList<>();
+        for (int index = chunks.size() - 1; index >= 0; index--) {
+            byte[] chunk = Base64.getDecoder().decode(chunks.get(index));
+            for (int i = 0; i < chunk.length; i++) {
+                chunk[i] = (byte) (chunk[i] ^ xorKey);
+            }
+            decoded.add(chunk);
+        }
+        int size = decoded.stream().mapToInt(item -> item.length).sum();
+        byte[] raw = new byte[size];
+        int offset = 0;
+        for (byte[] chunk : decoded) {
+            System.arraycopy(chunk, 0, raw, offset, chunk.length);
+            offset += chunk.length;
+        }
+        return new String(raw, StandardCharsets.UTF_8);
     }
 }

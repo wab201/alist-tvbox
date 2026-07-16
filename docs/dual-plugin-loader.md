@@ -184,3 +184,60 @@ Atvp secspider loader selected: self
 - 不绕过 SHA256 hash 校验。
 - 不修改已签名插件正文。
 - 不把私钥提交到仓库。
+- `Atvp.py` 缺少 `Crypto.Signature.eddsa` 时直接失败，不降级为跳过验签。
+- 三方插件编译入口会拒绝 `name`、`remark`、`id`、`kid` 中的换行，避免外层 `//@` 包头被注入。
+- 填写 Ed25519 公钥时，编译器会验证它是否匹配私钥；不匹配会拒绝生成包。
+
+## 严格验证命令
+
+Python loader 语法检查：
+
+```powershell
+python -m py_compile src/main/resources/static/Atvp.py
+```
+
+安装 Atvp 互操作测试依赖到本地工作目录：
+
+```powershell
+python -m pip install --target work\pydeps pycryptodome requests
+```
+
+后端编译：
+
+```powershell
+%USERPROFILE%\.m2\wrapper\dists\apache-maven-3.8.6-bin\1ks0nkde5v1pk9vtc31i9d0lcd\apache-maven-3.8.6\bin\mvn.cmd -DskipTests compile
+```
+
+插件编译器和 Atvp 互操作测试：
+
+```powershell
+%USERPROFILE%\.m2\wrapper\dists\apache-maven-3.8.6-bin\1ks0nkde5v1pk9vtc31i9d0lcd\apache-maven-3.8.6\bin\mvn.cmd "-Dtest=PluginCompilerServiceTest,PluginCompilerAtvpInteropTest" -DfailIfNoTests=false -DforkCount=0 test
+```
+
+整仓测试可排除本机 Docker/Testcontainers 依赖的 PostgreSQL 迁移测试：
+
+```powershell
+%USERPROFILE%\.m2\wrapper\dists\apache-maven-3.8.6-bin\1ks0nkde5v1pk9vtc31i9d0lcd\apache-maven-3.8.6\bin\mvn.cmd "-Dtest=*,!PostgreSqlMigrationTest" -DfailIfNoTests=false -DforkCount=0 test
+```
+
+说明：
+
+- 当前机器默认 Surefire fork 模式会卡住子进程，因此使用 `-DforkCount=0`。
+- `PostgreSqlMigrationTest` 依赖 Docker/Testcontainers；本机没有有效 Docker 环境时会失败，和插件 loader/编译链路无关。
+
+前端验证：
+
+```powershell
+cd web-ui
+$env:PATH='C:\Users\wab201\.cache\codex-runtimes\codex-primary-runtime\dependencies\node\bin;' + $env:PATH
+.\node_modules\.bin\vue-tsc.cmd --noEmit --pretty false
+.\node_modules\.bin\vite.cmd build
+```
+
+如果使用 pnpm 安装依赖，需要注意此项目原本使用 `package-lock.json`，pnpm 不会像 npm 一样暴露传递依赖。当前验证中临时链接过这些既有直接 import 的传递包：
+
+- `node_modules/@vue/runtime-core`
+- `node_modules/@vueuse/core`
+- `node_modules/@vueuse/shared`
+
+这只是本地验证环境差异，不是本分支源码依赖变更。
