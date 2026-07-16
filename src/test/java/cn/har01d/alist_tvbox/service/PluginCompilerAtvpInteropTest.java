@@ -27,7 +27,20 @@ class PluginCompilerAtvpInteropTest {
         Assumptions.assumeTrue(pythonHasAtvpDependencies(), "Python Atvp dependencies are not installed");
 
         KeyPair keyPair = generateKeyPair();
-        String source = "from base.spider import Spider\n\nclass Spider(Spider):\n    def getName(self):\n        return 'Interop'\n";
+        String source = """
+                from base.spider import Spider
+
+                class Spider(Spider):
+                    def init(self, extend=""):
+                        self.extend = extend
+                        return "inner-init-ok"
+
+                    def getName(self):
+                        return "Interop"
+
+                    def playerContent(self, flag, id, vipFlags):
+                        return {"parse": 0, "url": "https://example.invalid/video.mp4", "header": {"X-Test": "self"}}
+                """;
         PluginCompilerService.CompileResponse response = service.compileSecspider(
                 new PluginCompilerService.CompileRequest(
                         "Interop",
@@ -58,7 +71,11 @@ class PluginCompilerAtvpInteropTest {
         ProcessResult result = runPython(runner);
         assertThat(result.exitCode()).as(result.stderr()).isZero();
         assertThat(result.stdout()).contains("DECRYPT_OK");
-        assertThat(result.stdout()).contains("Interop");
+        assertThat(result.stdout()).contains("Atvp secspider loader selected: self");
+        assertThat(result.stdout()).contains("RUNTIME_INIT inner-init-ok");
+        assertThat(result.stdout()).contains("RUNTIME_NAME Interop");
+        assertThat(result.stdout()).contains("RUNTIME_PLAYER");
+        assertThat(result.stdout()).contains("https://example.invalid/video.mp4");
     }
 
     private boolean pythonHasAtvpDependencies() throws Exception {
@@ -93,12 +110,17 @@ class PluginCompilerAtvpInteropTest {
     private String runnerScript(Path atvp, Path packageFile) {
         return """
                 import importlib.util
+                import base64
                 import sys
+                import json
                 import types
 
                 base_mod = types.ModuleType("base")
                 spider_mod = types.ModuleType("base.spider")
                 class BaseSpider:
+                    def init(self, extend=""):
+                        self.extend = extend
+                        return None
                     def log(self, *args):
                         print(*args)
                 spider_mod.Spider = BaseSpider
@@ -109,9 +131,20 @@ class PluginCompilerAtvpInteropTest {
                 mod = importlib.util.module_from_spec(spec)
                 spec.loader.exec_module(mod)
                 spider = mod.Spider()
-                plain = spider._decrypt_secspider_source(open(r"%s", encoding="utf-8").read())
+                package_path = r"%s"
+                plain = spider._decrypt_secspider_source(open(package_path, encoding="utf-8").read())
                 print("DECRYPT_OK")
                 print(plain)
+                payload = {
+                    "source": package_path,
+                    "secspider_loader": "self",
+                    "token": "-",
+                    "local_proxy_config": {},
+                }
+                extend = base64.b64encode(json.dumps(payload).encode("utf-8")).decode("ascii")
+                print("RUNTIME_INIT", spider.init(extend))
+                print("RUNTIME_NAME", spider.getName())
+                print("RUNTIME_PLAYER", json.dumps(spider.playerContent("test", "video-id", []), ensure_ascii=False, sort_keys=True))
                 """.formatted(escapePath(atvp), escapePath(packageFile));
     }
 
