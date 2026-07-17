@@ -180,8 +180,24 @@ class Spider(HostSpider):
         "T0wEER4QHQQdTEtMEEodTw==",
         "HxodEBlLSEoEERFIEQQdHA==",
     ]
-    _self_public_key_chunks = []
-    _self_master_secret_chunks = []
+    _self_public_key_chunks = [
+        "HQ==",
+        "N0dCVVteVDdcUk46Ojo6Og==",
+        "L3YlZ0dWKh06Ojo6OlJZUw==",
+        "eHleY3w4bWQgdm0lY0FiUg==",
+        "Xmd9by5hT1BOYSRVJ2IifA==",
+        "Rk5TXCVBYFZuUlZyeCBaUg==",
+        "VDdcUk46Ojo6Oh1aVHhgVQ==",
+        "Ojo6OjpVUlBeWTdHQlVbXg==",
+    ]
+    _self_master_secret_chunks = [
+        "GBpM",
+        "TRERERxMSxAcHhpPHUsZHA==",
+        "G00YTBkREEtMH0sdHUwYHg==",
+        "TR8fGBkRShoYEB8ZSBoQHA==",
+        "GRgEHkpNTRAdShAfSB4YTQ==",
+        "WkxFTwRESFpdTFsEXkhLGw==",
+    ]
 
     def __init__(self):
         super().__init__()

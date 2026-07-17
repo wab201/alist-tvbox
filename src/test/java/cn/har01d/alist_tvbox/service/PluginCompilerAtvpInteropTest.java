@@ -56,11 +56,9 @@ class PluginCompilerAtvpInteropTest {
         );
 
         Path atvp = tempDir.resolve("Atvp.py");
-        String atvpText = Files.readString(Path.of("src/main/resources/static/Atvp.py"), StandardCharsets.UTF_8)
-                .replaceFirst("(?m)^    _self_public_key_chunks = \\[\\]",
-                        "    _self_public_key_chunks = " + pyList(response.publicKeyChunks()))
-                .replaceFirst("(?m)^    _self_master_secret_chunks = \\[\\]",
-                        "    _self_master_secret_chunks = " + pyList(response.masterSecretChunks()));
+        String atvpText = Files.readString(Path.of("src/main/resources/static/Atvp.py"), StandardCharsets.UTF_8);
+        atvpText = replacePythonListAssignment(atvpText, "_self_public_key_chunks", pyList(response.publicKeyChunks()));
+        atvpText = replacePythonListAssignment(atvpText, "_self_master_secret_chunks", pyList(response.masterSecretChunks()));
         Files.writeString(atvp, atvpText, StandardCharsets.UTF_8);
 
         Path packageFile = tempDir.resolve("package.txt");
@@ -161,6 +159,13 @@ class PluginCompilerAtvpInteropTest {
             builder.append("\"").append(values.get(i).replace("\\", "\\\\").replace("\"", "\\\"")).append("\"");
         }
         return builder.append("]").toString();
+    }
+
+    private String replacePythonListAssignment(String source, String name, String replacementList) {
+        return source.replaceFirst(
+                "(?s)(?m)^    " + name + " = \\[.*?^    \\]",
+                "    " + name + " = " + replacementList
+        );
     }
 
     private KeyPair generateKeyPair() throws Exception {
