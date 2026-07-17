@@ -180,24 +180,8 @@ class Spider(HostSpider):
         "T0wEER4QHQQdTEtMEEodTw==",
         "HxodEBlLSEoEERFIEQQdHA==",
     ]
-    _self_public_key_chunks = [
-        "HQ==",
-        "N0dCVVteVDdcUk46Ojo6Og==",
-        "L3YlZ0dWKh06Ojo6OlJZUw==",
-        "eHleY3w4bWQgdm0lY0FiUg==",
-        "Xmd9by5hT1BOYSRVJ2IifA==",
-        "Rk5TXCVBYFZuUlZyeCBaUg==",
-        "VDdcUk46Ojo6Oh1aVHhgVQ==",
-        "Ojo6OjpVUlBeWTdHQlVbXg==",
-    ]
-    _self_master_secret_chunks = [
-        "GBpM",
-        "TRERERxMSxAcHhpPHUsZHA==",
-        "G00YTBkREEtMH0sdHUwYHg==",
-        "TR8fGBkRShoYEB8ZSBoQHA==",
-        "GRgEHkpNTRAdShAfSB4YTQ==",
-        "WkxFTwRESFpdTFsEXkhLGw==",
-    ]
+    _self_public_key_chunks = []
+    _self_master_secret_chunks = []
 
     def __init__(self):
         super().__init__()
@@ -447,7 +431,44 @@ class Spider(HostSpider):
             base64.b64decode(self._strip_prefix(headers["sig"], "base64:")),
         )
 
+    def _load_external_self_keyring(self):
+        candidates = []
+        env_path = str(os.environ.get("ATV_SECSPIDER_KEYRING") or "").strip()
+        if env_path:
+            candidates.append(env_path)
+        candidates.extend([
+            "/data/secspider/atvp-keyring.json",
+            "/opt/atv/data/secspider/atvp-keyring.json",
+        ])
+        for candidate in candidates:
+            try:
+                if not candidate or not os.path.isfile(candidate):
+                    continue
+                with open(candidate, "r", encoding="utf-8") as fp:
+                    payload = json.load(fp)
+                public_chunks = (
+                    payload.get("publicKeyChunks")
+                    or payload.get("public_key_chunks")
+                    or []
+                )
+                secret_chunks = (
+                    payload.get("masterSecretChunks")
+                    or payload.get("master_secret_chunks")
+                    or []
+                )
+                if isinstance(public_chunks, list) and isinstance(secret_chunks, list) and public_chunks and secret_chunks:
+                    return public_chunks, secret_chunks
+            except Exception as e:
+                self.log(f"Atvp external self keyring load failed: {candidate} {e}")
+        return None
+
     def _iter_secspider_keyrings(self):
+        external_self_keyring = self._load_external_self_keyring()
+        self_public_chunks = self._self_public_key_chunks
+        self_secret_chunks = self._self_master_secret_chunks
+        if external_self_keyring:
+            self_public_chunks, self_secret_chunks = external_self_keyring
+
         keyrings = [
             (
                 "stock",
@@ -457,12 +478,12 @@ class Spider(HostSpider):
                 self.MASTER_SECRET_XOR,
             )
         ]
-        if self._self_public_key_chunks and self._self_master_secret_chunks:
+        if self_public_chunks and self_secret_chunks:
             keyrings.append(
                 (
                     "self",
-                    self._self_public_key_chunks,
-                    self._self_master_secret_chunks,
+                    self_public_chunks,
+                    self_secret_chunks,
                     self.PUBLIC_KEY_XOR,
                     self.MASTER_SECRET_XOR,
                 )

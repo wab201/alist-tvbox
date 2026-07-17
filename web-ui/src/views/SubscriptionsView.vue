@@ -338,7 +338,7 @@
           <el-button type="primary" :loading="importingPlugins" :disabled="!pluginImportForm.url.trim()" @click="importPlugins">
             导入仓库
           </el-button>
-          <el-button @click="openPluginCompiler">三方插件编译</el-button>
+          <el-button type="primary" @click="openPluginCompiler">三方插件编译</el-button>
         </el-form-item>
       </el-form>
       <el-progress v-if="importingPlugins" :percentage="100" :indeterminate="true" :duration="5"/>
@@ -599,10 +599,10 @@
           </template>
           <div class="plugin-compiler-guide-body">
             <ol>
-              <li>准备自有 Ed25519 密钥对和 master secret，把 Python 明文插件粘贴到“插件明文”。内层明文必须是合法 Python，不要写外层 <code>//@name</code> 这类包头。</li>
-              <li>粘贴私钥和 master secret 后点击“编译”。私钥只参与本次签名，后端不会保存或回显。</li>
-              <li>把“插件包”保存到插件仓库文件，例如 <code>py/javbus_self.txt</code>，再在仓库 <code>spiders_v2.json</code> 中引用它。</li>
-              <li>把“Atvp chunks”复制到自有 <code>Atvp.py</code> 的 <code>_self_public_key_chunks</code> 和 <code>_self_master_secret_chunks</code>，重新生成订阅后测试。</li>
+              <li>默认使用容器托管的 Ed25519 密钥对和 master secret，只需要把 Python 明文插件粘贴到“插件明文”。内层明文必须是合法 Python，不要写外层 <code>//@name</code> 这类包头。</li>
+              <li>容器首次启动会自动生成密钥文件，保存到 <code>/data/secspider</code>；只要 Docker 挂载的 <code>/data</code> 不丢，升级镜像后密钥仍然可用。</li>
+              <li>点击“编译”后会生成 <code>secspider/1</code> 插件包，自动保存到 <code>/www/static/self-plugins</code>，并自动导入插件管理列表。</li>
+              <li>如果需要更换密钥，使用“重置密钥对”。重置后旧密钥编译的自有插件需要重新编译。</li>
               <li>需要强制只走自有 keyring 时，可在站点扩展配置里设置 <code>secspider_loader: self</code>；默认 <code>auto</code> 会先试原版再试自有。</li>
             </ol>
             <div class="plugin-compiler-example-grid">
@@ -632,6 +632,28 @@ class Spider(Spider):
           </div>
         </el-collapse-item>
       </el-collapse>
+      <el-alert
+        v-if="secspiderKeyStatus"
+        type="success"
+        show-icon
+        :closable="false"
+        style="margin-bottom: 12px"
+      >
+        <template #title>
+          容器托管密钥已就绪：{{ secspiderKeyStatus.keyringPath }}
+        </template>
+      </el-alert>
+      <div class="plugin-compiler-key-actions">
+        <el-button type="primary" :loading="secspiderKeyLoading" @click="generateSecspiderKey">
+          生成密钥对
+        </el-button>
+        <el-button type="danger" :loading="secspiderKeyLoading" @click="resetSecspiderKey">
+          重置密钥对
+        </el-button>
+        <span class="plugin-compiler-key-hint">
+          私钥仅保存在容器数据目录；编译时后端自动读取，不会回显到页面。
+        </span>
+      </div>
       <el-form :model="pluginCompilerForm" label-width="120px">
         <el-form-item label="插件名称" required>
           <el-input v-model="pluginCompilerForm.name" placeholder="例如 JavBus"/>
@@ -648,6 +670,12 @@ class Spider(Spider):
         <el-form-item label="remark">
           <el-input v-model="pluginCompilerForm.remark" placeholder="可留空"/>
         </el-form-item>
+        <el-form-item label="托管密钥">
+          <el-switch v-model="pluginCompilerForm.useManagedKey" active-text="使用容器密钥" inactive-text="手动填写"/>
+        </el-form-item>
+        <el-form-item label="自动导入">
+          <el-switch v-model="pluginCompilerForm.autoImport" active-text="编译后导入插件管理" inactive-text="只生成包"/>
+        </el-form-item>
         <el-form-item label="插件明文" required>
           <el-input
             v-model="pluginCompilerForm.source"
@@ -656,7 +684,7 @@ class Spider(Spider):
             placeholder="粘贴 Python 明文插件源码"
           />
         </el-form-item>
-        <el-form-item label="Ed25519 私钥" required>
+        <el-form-item v-if="!pluginCompilerForm.useManagedKey" label="Ed25519 私钥" required>
           <el-input
             v-model="pluginCompilerForm.privateKey"
             type="textarea"
@@ -665,7 +693,7 @@ class Spider(Spider):
             placeholder="PKCS8 PEM/base64，或 32 字节 raw seed 的 base64/hex"
           />
         </el-form-item>
-        <el-form-item label="Ed25519 公钥">
+        <el-form-item v-if="!pluginCompilerForm.useManagedKey" label="Ed25519 公钥">
           <el-input
             v-model="pluginCompilerForm.publicKey"
             type="textarea"
@@ -673,7 +701,7 @@ class Spider(Spider):
             placeholder="可选。填写后返回 _self_public_key_chunks"
           />
         </el-form-item>
-        <el-form-item label="master secret" required>
+        <el-form-item v-if="!pluginCompilerForm.useManagedKey" label="master secret" required>
           <el-input
             v-model="pluginCompilerForm.masterSecret"
             type="textarea"
@@ -684,7 +712,7 @@ class Spider(Spider):
         </el-form-item>
       </el-form>
       <el-alert
-        title="私钥只随本次请求发送到后端参与签名，接口不会保存或回显私钥。生成包只适用于填入匹配公钥和 master secret 的自有 Atvp.py。"
+        title="默认使用容器托管密钥签名和加密。手动模式下，私钥只随本次请求发送到后端参与签名，接口不会保存或回显私钥。"
         type="warning"
         show-icon
         :closable="false"
@@ -696,6 +724,13 @@ class Spider(Spider):
           <el-descriptions-item label="kid">{{ pluginCompilerResult.kid }}</el-descriptions-item>
           <el-descriptions-item label="大小">{{ pluginCompilerResult.packageSize }}</el-descriptions-item>
           <el-descriptions-item label="明文 SHA256" :span="3">{{ pluginCompilerResult.plainSha256 }}</el-descriptions-item>
+          <el-descriptions-item v-if="pluginCompilerResult.importedPluginId" label="已导入插件" :span="3">
+            #{{ pluginCompilerResult.importedPluginId }} {{ pluginCompilerResult.importedPluginName }}，
+            <a :href="pluginCompilerResult.pluginUrl" target="_blank">{{ pluginCompilerResult.pluginUrl }}</a>
+          </el-descriptions-item>
+          <el-descriptions-item v-if="pluginCompilerResult.repositoryUrl" label="自用仓库" :span="3">
+            <a :href="pluginCompilerResult.repositoryUrl" target="_blank">{{ pluginCompilerResult.repositoryUrl }}</a>
+          </el-descriptions-item>
         </el-descriptions>
         <el-tabs v-model="pluginCompilerResultTab">
           <el-tab-pane label="插件包" name="package">
@@ -1108,6 +1143,8 @@ interface PluginCompileForm {
   privateKey: string
   publicKey: string
   masterSecret: string
+  useManagedKey: boolean
+  autoImport: boolean
 }
 
 interface PluginCompileResult {
@@ -1119,6 +1156,22 @@ interface PluginCompileResult {
   wrap: string
   sign: string
   kid: string
+  publicKeyChunks: string[]
+  masterSecretChunks: string[]
+  importedPluginId: number | null
+  importedPluginName: string
+  pluginUrl: string
+  repositoryUrl: string
+  localPath: string
+}
+
+interface SecspiderKeyStatus {
+  generated: boolean
+  privateKeyPath: string
+  publicKeyPath: string
+  masterSecretPath: string
+  keyringPath: string
+  publicKey: string
   publicKeyChunks: string[]
   masterSecretChunks: string[]
 }
@@ -1198,6 +1251,8 @@ const pluginFilterConfigVisible = ref(false)
 const sourceExtendVisible = ref(false)
 const importingPlugins = ref(false)
 const pluginCompiling = ref(false)
+const secspiderKeyLoading = ref(false)
+const secspiderKeyStatus = ref<SecspiderKeyStatus | null>(null)
 const tgVisible = ref(false)
 const scanVisible = ref(false)
 const confirm = ref(false)
@@ -1324,7 +1379,9 @@ const pluginCompilerForm = ref<PluginCompileForm>({
   source: '',
   privateKey: '',
   publicKey: '',
-  masterSecret: ''
+  masterSecret: '',
+  useManagedKey: true,
+  autoImport: true
 })
 const pluginCompilerResult = ref<PluginCompileResult | null>(null)
 const pluginCompilerResultTab = ref('package')
@@ -1494,7 +1551,9 @@ const resetPluginCompilerForm = () => {
     source: '',
     privateKey: '',
     publicKey: '',
-    masterSecret: ''
+    masterSecret: '',
+    useManagedKey: true,
+    autoImport: true
   }
   pluginCompilerResult.value = null
   pluginCompilerResultTab.value = 'package'
@@ -2588,6 +2647,39 @@ const showPlugins = () => {
 const openPluginCompiler = () => {
   resetPluginCompilerForm()
   pluginCompilerVisible.value = true
+  loadSecspiderKeyStatus()
+}
+
+const loadSecspiderKeyStatus = async () => {
+  secspiderKeyLoading.value = true
+  try {
+    const {data} = await axios.get('/api/plugins/secspider/key')
+    secspiderKeyStatus.value = data
+  } finally {
+    secspiderKeyLoading.value = false
+  }
+}
+
+const generateSecspiderKey = async () => {
+  secspiderKeyLoading.value = true
+  try {
+    const {data} = await axios.post('/api/plugins/secspider/key/generate')
+    secspiderKeyStatus.value = data
+    ElMessage.success('密钥对已就绪')
+  } finally {
+    secspiderKeyLoading.value = false
+  }
+}
+
+const resetSecspiderKey = async () => {
+  secspiderKeyLoading.value = true
+  try {
+    const {data} = await axios.post('/api/plugins/secspider/key/reset')
+    secspiderKeyStatus.value = data
+    ElMessage.warning('密钥对已重置，旧自有插件需要重新编译')
+  } finally {
+    secspiderKeyLoading.value = false
+  }
 }
 
 const showPluginFilters = () => {
@@ -2648,11 +2740,11 @@ const compilePlugin = async () => {
     ElMessage.warning('请粘贴插件明文')
     return
   }
-  if (!form.privateKey.trim()) {
+  if (!form.useManagedKey && !form.privateKey.trim()) {
     ElMessage.warning('请粘贴 Ed25519 私钥')
     return
   }
-  if (!form.masterSecret.trim()) {
+  if (!form.useManagedKey && !form.masterSecret.trim()) {
     ElMessage.warning('请填写 master secret')
     return
   }
@@ -2668,11 +2760,16 @@ const compilePlugin = async () => {
       source: form.source,
       privateKey: form.privateKey,
       publicKey: form.publicKey,
-      masterSecret: form.masterSecret
+      masterSecret: form.masterSecret,
+      useManagedKey: form.useManagedKey,
+      autoImport: form.autoImport
     })
     pluginCompilerResult.value = data
     pluginCompilerResultTab.value = 'package'
-    ElMessage.success('编译完成')
+    ElMessage.success(data.importedPluginId ? '编译完成，已自动导入插件管理' : '编译完成')
+    if (data.importedPluginId) {
+      loadManagedSources()
+    }
   } finally {
     pluginCompiling.value = false
   }
@@ -3110,6 +3207,19 @@ onUnmounted(() => {
 
 .plugin-compiler-guide {
   margin-bottom: 14px;
+}
+
+.plugin-compiler-key-actions {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.plugin-compiler-key-hint {
+  color: var(--el-text-color-secondary);
+  font-size: 13px;
 }
 
 .plugin-compiler-guide-body {

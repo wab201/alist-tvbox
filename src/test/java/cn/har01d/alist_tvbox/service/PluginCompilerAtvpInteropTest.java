@@ -163,7 +163,7 @@ class PluginCompilerAtvpInteropTest {
 
     private String replacePythonListAssignment(String source, String name, String replacementList) {
         return source.replaceFirst(
-                "(?s)(?m)^    " + name + " = \\[.*?^    \\]",
+                "(?s)(?m)^    " + name + " = \\[(?:.*?^    \\]|[^\\n]*\\])",
                 "    " + name + " = " + replacementList
         );
     }

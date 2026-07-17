@@ -7,6 +7,8 @@ import cn.har01d.alist_tvbox.config.WebSecurityConfiguration;
 import cn.har01d.alist_tvbox.entity.SettingRepository;
 import cn.har01d.alist_tvbox.service.PluginCompilerService;
 import cn.har01d.alist_tvbox.service.PluginService;
+import cn.har01d.alist_tvbox.service.SecspiderKeyService;
+import cn.har01d.alist_tvbox.service.SelfPluginFileService;
 import cn.har01d.alist_tvbox.service.SubscriptionService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
@@ -120,8 +122,11 @@ class PluginControllerSecurityTest {
     @Import(WebSecurityConfiguration.class)
     static class TestConfig {
         @Bean
-        PluginController pluginController(PluginService pluginService, PluginCompilerService pluginCompilerService) {
-            return new PluginController(pluginService, pluginCompilerService);
+        PluginController pluginController(PluginService pluginService,
+                                          PluginCompilerService pluginCompilerService,
+                                          SecspiderKeyService secspiderKeyService,
+                                          SelfPluginFileService selfPluginFileService) {
+            return new PluginController(pluginService, pluginCompilerService, secspiderKeyService, selfPluginFileService);
         }
 
         @Bean
@@ -132,6 +137,16 @@ class PluginControllerSecurityTest {
         @Bean
         PluginService pluginService() {
             return mock(PluginService.class);
+        }
+
+        @Bean
+        SecspiderKeyService secspiderKeyService() {
+            return mock(SecspiderKeyService.class);
+        }
+
+        @Bean
+        SelfPluginFileService selfPluginFileService() {
+            return mock(SelfPluginFileService.class);
         }
 
         @Bean

@@ -94,7 +94,12 @@ public class PluginCompilerService {
                     "ed25519",
                     kid,
                     publicKeyChunks,
-                    masterSecretChunks
+                    masterSecretChunks,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null
             );
         } catch (BadRequestException e) {
             throw e;
@@ -319,8 +324,23 @@ public class PluginCompilerService {
             String source,
             String privateKey,
             String publicKey,
-            String masterSecret
+            String masterSecret,
+            Boolean useManagedKey,
+            Boolean autoImport
     ) {
+        public CompileRequest(
+                String name,
+                Integer version,
+                String remark,
+                String id,
+                String kid,
+                String source,
+                String privateKey,
+                String publicKey,
+                String masterSecret
+        ) {
+            this(name, version, remark, id, kid, source, privateKey, publicKey, masterSecret, null, null);
+        }
     }
 
     public record CompileResponse(
@@ -333,7 +353,35 @@ public class PluginCompilerService {
             String sign,
             String kid,
             List<String> publicKeyChunks,
-            List<String> masterSecretChunks
+            List<String> masterSecretChunks,
+            Integer importedPluginId,
+            String importedPluginName,
+            String pluginUrl,
+            String repositoryUrl,
+            String localPath
     ) {
+        public CompileResponse withImportedPlugin(Integer importedPluginId,
+                                                  String importedPluginName,
+                                                  String pluginUrl,
+                                                  String repositoryUrl,
+                                                  String localPath) {
+            return new CompileResponse(
+                    packageText,
+                    plainSha256,
+                    packageSize,
+                    format,
+                    alg,
+                    wrap,
+                    sign,
+                    kid,
+                    publicKeyChunks,
+                    masterSecretChunks,
+                    importedPluginId,
+                    importedPluginName,
+                    pluginUrl,
+                    repositoryUrl,
+                    localPath
+            );
+        }
     }
 }
