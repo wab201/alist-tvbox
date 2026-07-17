@@ -1,0 +1,167 @@
+name: Publish self Docker image
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: 'Image tag to publish, for example self, dual-plugin-loader, or v1.0-self'
+        required: true
+        default: 'dual-plugin-loader'
+      publish_latest_self:
+        description: 'Also publish latest-self tag'
+        required: true
+        type: boolean
+        default: true
+  push:
+    branches:
+      - codex/dual-plugin-loader
+    tags:
+      - 'self-v*'
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: publish-self-docker-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test-publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: ./web-ui/package-lock.json
+
+      - name: Install WebUI dependencies
+        working-directory: ./web-ui
+        run: npm ci
+
+      - name: Build WebUI
+        working-directory: ./web-ui
+        run: npm run build
+
+      - name: Setup GraalVM
+        uses: graalvm/setup-graalvm@v1
+        with:
+          java-version: '25'
+          distribution: 'graalvm'
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          cache: 'maven'
+
+      - name: Test and package backend
+        run: mvn -B -Dtest=*,!PostgreSqlMigrationTest -DfailIfNoTests=false -DforkCount=0 package --file pom.xml
+
+      - name: Extract Spring Boot layers
+        working-directory: ./target
+        run: java -Djarmode=layertools -jar alist-tvbox-1.0.jar extract
+
+      - name: Set app version
+        shell: bash
+        run: |
+          mkdir -p data
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            VERSION="${GITHUB_REF_NAME}"
+          elif [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            VERSION="${{ inputs.image_tag }}"
+          else
+            VERSION="dual-plugin-loader"
+          fi
+          printf '%s\n%s\n' "$VERSION" "${GITHUB_SHA}" > data/version
+          cp data/version data/app_version
+          cat data/version
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Build local test image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: docker/Dockerfile
+          platforms: linux/amd64
+          push: false
+          load: true
+          tags: alist-tvbox:self-test
+          cache-from: type=gha,scope=self-alist-tvbox
+          cache-to: type=gha,mode=max,scope=self-alist-tvbox
+
+      - name: Smoke test local image
+        shell: bash
+        run: |
+          docker run -d --name self-alist-tvbox-test -p 4567:4567 alist-tvbox:self-test
+
+          success=false
+          for i in {1..30}; do
+            response="$(curl -fsS http://localhost:4567/api/alist/status || true)"
+            echo "Attempt $i/30: status=${response:-empty}"
+            if [[ "$response" == "2" ]]; then
+              success=true
+              break
+            fi
+            sleep 2
+          done
+
+          if [[ "$success" != "true" ]]; then
+            docker logs self-alist-tvbox-test || true
+            docker rm -f self-alist-tvbox-test || true
+            exit 1
+          fi
+
+          docker rm -f self-alist-tvbox-test
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build image tag list
+        id: tags
+        shell: bash
+        run: |
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          image="ghcr.io/${owner}/alist-tvbox"
+
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            main_tag="${GITHUB_REF_NAME}"
+          elif [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            main_tag="${{ inputs.image_tag }}"
+          else
+            main_tag="dual-plugin-loader"
+          fi
+
+          tags="${image}:${main_tag},${image}:sha-${GITHUB_SHA::12}"
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" && "${{ inputs.publish_latest_self }}" == "true" ]]; then
+            tags="${tags},${image}:latest-self"
+          elif [[ "${GITHUB_REF_TYPE}" == "branch" ]]; then
+            tags="${tags},${image}:latest-self"
+          fi
+
+          echo "image=${image}" >> "$GITHUB_OUTPUT"
+          echo "tags=${tags}" >> "$GITHUB_OUTPUT"
+          echo "$tags"
+
+      - name: Build and push multi-arch image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: docker/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.tags.outputs.tags }}
+          cache-from: type=gha,scope=self-alist-tvbox
+          cache-to: type=gha,mode=max,scope=self-alist-tvbox
+
+      - name: Print image usage
+        run: |
+          echo "Published image:"
+          echo "${{ steps.tags.outputs.tags }}"
