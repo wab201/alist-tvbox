@@ -70,6 +70,9 @@ class AtvpScriptServiceTest {
         assertThat(script).contains("return text.lstrip(\"\\ufeff\").replace(\"\\x00\", \"\")");
         assertThat(script).contains("if value.startswith(self.DETAIL_PREFIX):");
         assertThat(script).contains("ids = [value[len(self.DETAIL_PREFIX):]]");
+        assertThat(script).contains("def _looks_like_direct_play_id(self, play_id):");
+        assertThat(script).contains("return self._build_direct_play_detail(value)");
+        assertThat(script).contains("lowered.startswith((\"magnet:\", \"ed2k://\", \"jab-offline:\", \"llss-offline:\", \"llss-pending:\"))");
         assertThat(script).contains("result[\"url\"] = self._restore_original_magnet_id(vid)");
         assertThat(script).contains("result = self._proxy_player_content(result, result.get(\"url\") if isinstance(result, dict) else vid, context)");
         assertThat(script).contains("if share_url is not None and not self._category_mode_enabled():");

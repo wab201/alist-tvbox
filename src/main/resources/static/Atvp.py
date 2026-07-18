@@ -1110,6 +1110,20 @@ class Spider(HostSpider):
             }]
         }
 
+    def _looks_like_direct_play_id(self, play_id):
+        value = str(play_id or "").strip()
+        if not value:
+            return False
+        if self._lookup_play_context(value):
+            return True
+        lowered = value.lower()
+        return (
+            value.startswith("1@")
+            or lowered.startswith(("magnet:", "ed2k://", "jab-offline:", "llss-offline:", "llss-pending:"))
+            or lowered.startswith("https://jab.local/magnet/")
+            or value.startswith("__ALISTTVBOX_")
+        )
+
     def _is_local_proxy_player_candidate(self, result):
         if not isinstance(result, dict):
             return False
@@ -1336,6 +1350,9 @@ class Spider(HostSpider):
             value = str(ids[0] or "").strip()
             if value.startswith(self.DETAIL_PREFIX):
                 ids = [value[len(self.DETAIL_PREFIX):]]
+                value = str(ids[0] or "").strip()
+            if self._category_mode_enabled() and self._looks_like_direct_play_id(value):
+                return self._build_direct_play_detail(value)
             share_url = self._decode_parse(ids[0])
             if share_url is not None and not self._category_mode_enabled():
                 return self._parse(share_url)
