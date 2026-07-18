@@ -366,6 +366,12 @@ class Spider(HostSpider):
         suffix = f"/{token}" if token else ""
         return f"{backend_api}/{path}{suffix}"
 
+    def _build_backend_root_endpoint(self, path):
+        backend_api = str(self._backend_api or "").rstrip("/")
+        if not backend_api:
+            raise ValueError(f"Atvp {path} backend api is empty")
+        return f"{backend_api}/{str(path or '').strip('/')}"
+
     def _is_remote_source(self, source):
         value = str(source or "").strip().lower()
         return value.startswith("http://") or value.startswith("https://")
@@ -1269,7 +1275,7 @@ class Spider(HostSpider):
         if not token:
             return None
         rsp = self.post(
-            self._build_backend_endpoint(f"offline_download/{token}"),
+            self._build_backend_root_endpoint(f"offline_download/{token}"),
             json={"url": magnet_url},
             params={"ac": "gui"},
             timeout=90,
