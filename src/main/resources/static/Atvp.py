@@ -1138,7 +1138,26 @@ class Spider(HostSpider):
             "ALI", "QUARK", "UC", "PAN115", "PAN123", "PAN139", "CLOUD189", "BAIDU", "GUANGYA"
         }
 
+    def _with_inferred_local_proxy_type(self, result):
+        if not isinstance(result, dict):
+            return result
+        if str(result.get("type") or "").strip():
+            return result
+        url_text = str(result.get("url") or "").strip().lower()
+        if not url_text.startswith(("magnet:", "ed2k://")):
+            return result
+        pan115_config = self._localProxyConfig.get("PAN115") if isinstance(self._localProxyConfig, dict) else None
+        if isinstance(pan115_config, dict) and not pan115_config.get("enabled", True):
+            return result
+        if "PAN115" not in self._localProxyConfig:
+            return result
+        payload = dict(result)
+        payload["type"] = "PAN115"
+        self.log("Atvp inferred PAN115 local proxy type for magnet playback")
+        return payload
+
     def _prepare_local_proxy_player_payload(self, result):
+        result = self._with_inferred_local_proxy_type(result)
         if not self._is_local_proxy_player_candidate(result):
             return result
         payload = dict(result)
@@ -1171,7 +1190,7 @@ class Spider(HostSpider):
         if not url_text or url_text.startswith(("http://localhost:", "https://localhost:")):
             return result
         try:
-            type_text = str(result.get("type") or "").strip()
+            type_text = str(proxy_payload.get("type") or "").strip()
             self.log(
                 f"Atvp local proxy player candidate: type={type_text}, config_keys={','.join(sorted(self._localProxyConfig.keys()))}"
             )

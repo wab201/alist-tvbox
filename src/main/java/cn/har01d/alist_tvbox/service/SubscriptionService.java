@@ -1323,14 +1323,14 @@ public class SubscriptionService {
                         site.put("searchable", 0);
                         site.put("quickSearch", 0);
                     }
-                    sites.add(id++, site);
+                    addSourceSite(sites, id++, site);
                     log.debug("add builtin source {}: {}", source.siteKey(), site);
                 } else if (source.plugin() != null) {
                     Map<String, Object> site = buildPluginSite(source.plugin(), token, secret);
                     site.put("order", order);
                     String overrideKey = (String) site.get("key");
                     applySiteOverride(overrideKey, site, sites);
-                    sites.add(id++, site);
+                    addSourceSite(sites, id++, site);
                 }
                 order += 10;
             } catch (Exception e) {
@@ -1338,6 +1338,10 @@ public class SubscriptionService {
             }
         }
         return order;
+    }
+
+    private void addSourceSite(List<Map<String, Object>> sites, int index, Map<String, Object> site) {
+        sites.add(Math.min(index, sites.size()), site);
     }
 
     /**

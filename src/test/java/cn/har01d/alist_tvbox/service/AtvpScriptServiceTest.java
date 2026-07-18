@@ -79,5 +79,8 @@ class AtvpScriptServiceTest {
         assertThat(script).contains("if payload.get(\"parse\") == 0:");
         assertThat(script).contains("payload.pop(\"parse\", None)");
         assertThat(script).contains("Atvp local proxy player ok");
+        assertThat(script).contains("def _with_inferred_local_proxy_type(self, result):");
+        assertThat(script).contains("Atvp inferred PAN115 local proxy type for magnet playback");
+        assertThat(script).contains("payload[\"type\"] = \"PAN115\"");
     }
 }
