@@ -82,5 +82,9 @@ class AtvpScriptServiceTest {
         assertThat(script).contains("def _with_inferred_local_proxy_type(self, result):");
         assertThat(script).contains("Atvp inferred PAN115 local proxy type for magnet playback");
         assertThat(script).contains("payload[\"type\"] = \"PAN115\"");
+        assertThat(script).contains("def _play_offline_magnet(self, play_id, magnet_url):");
+        assertThat(script).contains("self._build_backend_endpoint(f\"offline_download/{token}\")");
+        assertThat(script).contains("Atvp offline magnet converted to client-proxy play");
+        assertThat(script).contains("offline_result = self._play_offline_magnet(vid, url_value)");
     }
 }

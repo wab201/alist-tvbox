@@ -10,7 +10,7 @@ import types
 from abc import ABCMeta, abstractmethod
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
-from urllib.parse import unquote, urlsplit
+from urllib.parse import parse_qs, unquote, urlsplit
 from xml.etree import ElementTree
 
 import requests
@@ -1229,6 +1229,64 @@ class Spider(HostSpider):
         result = self._proxy_player_content(result, play_id, context)
         return self._run_filters("play", result, self._build_player_context(play_id=play_id))
 
+    def _extract_expanded_torrent_filename(self, play_id):
+        value = str(play_id or "").strip()
+        if not value.lower().startswith("magnet:///"):
+            return ""
+        try:
+            names = parse_qs(urlsplit(value).query).get("name", [])
+            return str(names[0] or "").strip() if names else ""
+        except Exception:
+            return ""
+
+    def _flatten_offline_detail_items(self, detail_result):
+        vod_list = detail_result.get("list") if isinstance(detail_result, dict) else None
+        if not isinstance(vod_list, list):
+            return []
+        items = []
+        for vod in vod_list:
+            if not isinstance(vod, dict):
+                continue
+            inner_items = vod.get("items")
+            if isinstance(inner_items, list):
+                items.extend(item for item in inner_items if isinstance(item, dict))
+        return items
+
+    def _select_offline_item(self, items, play_id):
+        if not items:
+            return None
+        target_name = self._extract_expanded_torrent_filename(play_id).lower()
+        if target_name:
+            for item in items:
+                name = str(item.get("name") or "").strip().lower()
+                path = str(item.get("path") or "").strip().lower()
+                if name == target_name or path.endswith("/" + target_name):
+                    return item
+        return max(items, key=lambda item: int(item.get("size") or 0))
+
+    def _play_offline_magnet(self, play_id, magnet_url):
+        token = str(self._vod_token or "").strip()
+        if not token:
+            return None
+        rsp = self.post(
+            self._build_backend_endpoint(f"offline_download/{token}"),
+            json={"url": magnet_url},
+            params={"ac": "gui"},
+            timeout=90,
+        )
+        if rsp.status_code != 200 or not str(rsp.text or "").strip():
+            self.log(f"Atvp offline magnet skipped: status={rsp.status_code}")
+            return None
+        detail_result = json.loads(rsp.text)
+        items = self._flatten_offline_detail_items(detail_result)
+        item = self._select_offline_item(items, play_id)
+        backend_play_id = self._extract_backend_play_id(item.get("url") if item else "")
+        if not backend_play_id:
+            self.log("Atvp offline magnet returned no backend play id")
+            return None
+        self.log(f"Atvp offline magnet converted to client-proxy play: {backend_play_id}")
+        return self._play(backend_play_id)
+
     def _extract_backend_play_id(self, url_value):
         value = str(url_value or "").strip()
         if not value:
@@ -1483,6 +1541,11 @@ class Spider(HostSpider):
                 restored_url = self._restore_original_magnet_id(url_value)
                 if restored_url != url_value:
                     result["url"] = restored_url
+                    url_value = restored_url
+                if self._is_magnet_play_id(url_value):
+                    offline_result = self._play_offline_magnet(vid, url_value)
+                    if offline_result is not None:
+                        result = offline_result
                 backend_play_id = self._extract_backend_play_id(result.get("url"))
                 if backend_play_id:
                     self.log(f"Atvp backend /p url converted to client-proxy play: {backend_play_id}")
