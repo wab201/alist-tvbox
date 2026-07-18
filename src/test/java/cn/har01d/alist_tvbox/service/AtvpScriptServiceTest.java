@@ -87,5 +87,10 @@ class AtvpScriptServiceTest {
         assertThat(script).contains("self._build_backend_root_endpoint(f\"offline_download/{token}\")");
         assertThat(script).contains("Atvp offline magnet converted to client-proxy play");
         assertThat(script).contains("offline_result = self._play_offline_magnet(vid, url_value)");
+        assertThat(script).contains("def _fallback_backend_proxy_for_pan115(self, result, play_id):");
+        assertThat(script).contains("Atvp PAN115 local proxy fallback to backend /p");
+        assertThat(script).contains("payload[\"url\"] = self._build_backend_root_endpoint(f\"p/{token}/{backend_play_id}\")");
+        assertThat(script).contains("payload.pop(\"type\", None)");
+        assertThat(script).contains("payload.pop(\"header\", None)");
     }
 }

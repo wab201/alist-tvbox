@@ -1183,6 +1183,30 @@ class Spider(HostSpider):
             return payload
         return result
 
+    def _fallback_backend_proxy_for_pan115(self, result, play_id):
+        if not isinstance(result, dict):
+            return result
+        url_text = str(result.get("url") or "").strip()
+        if not url_text or url_text.startswith(("http://localhost:", "https://localhost:")):
+            return result
+        if "115cdn.net" not in url_text.lower():
+            return result
+        if str(result.get("type") or "").strip().upper() != "PAN115":
+            return result
+        token = str(self._vod_token or "").strip()
+        backend_play_id = str(play_id or "").strip()
+        if not token or not backend_play_id:
+            return result
+        payload = dict(result)
+        payload["url"] = self._build_backend_root_endpoint(f"p/{token}/{backend_play_id}")
+        payload["parse"] = 0
+        payload["jx"] = 0
+        payload["playUrl"] = ""
+        payload.pop("type", None)
+        payload.pop("header", None)
+        self.log(f"Atvp PAN115 local proxy fallback to backend /p: {backend_play_id}")
+        return payload
+
     def _proxy_player_content(self, result, task_seed, context=None):
         if not isinstance(result, dict):
             return result
@@ -1233,6 +1257,7 @@ class Spider(HostSpider):
         result = json.loads(body)
         context = self._build_player_context(play_id=play_id)
         result = self._proxy_player_content(result, play_id, context)
+        result = self._fallback_backend_proxy_for_pan115(result, play_id)
         return self._run_filters("play", result, self._build_player_context(play_id=play_id))
 
     def _extract_expanded_torrent_filename(self, play_id):

@@ -172,11 +172,16 @@ public class ProxyService {
                 log.debug("302 {} {}", driver, url);
                 response.sendRedirect(url);
                 return;
+            } else if (isPan115Driver(driver)) {
+                log.debug("direct proxy {} {}", driver, url);
+                headers.put("user-agent", Constants.USER_AGENT);
+                headers.put("referer", "https://115.com/");
             } else if (proxyDrivers.contains(driver) || url.contains("aliyundrive")
                     || url.contains("baidu.com") || url.contains("quark.cn") || url.contains("uc.cn")
                     || url.startsWith("http://localhost")) {
                 log.debug("{} {}", driver, url);
                 url = buildAListProxyUrl(site, path, fsDetail.getSign());
+                headers.put("referer", Constants.ALIPAN);
             } else {
                 // 302
                 log.debug("302 {} {}", driver, url);
@@ -184,7 +189,6 @@ public class ProxyService {
                 return;
             }
             log.debug("proxy url: {} {}", driver, url);
-            headers.put("referer", Constants.ALIPAN);
         }
 
         log.trace("headers: {}", headers);
@@ -195,6 +199,21 @@ public class ProxyService {
     static int parsePlayUrlId(String tid) {
         String[] parts = tid.split("@");
         return Integer.parseInt(parts[1].split("\\.")[0]);
+    }
+
+    static boolean isHopByHopRequestHeader(String name) {
+        if (name == null) {
+            return true;
+        }
+        return switch (name.toLowerCase()) {
+            case "host", "connection", "keep-alive", "proxy-authenticate", "proxy-authorization",
+                 "te", "trailer", "transfer-encoding", "upgrade", "accept-encoding" -> true;
+            default -> false;
+        };
+    }
+
+    static boolean isPan115Driver(String driver) {
+        return "115 Cloud".equals(driver) || "115 Share".equals(driver) || "115 Index".equals(driver);
     }
 
     private String buildAListProxyUrl(Site site, String path, String sign) {
@@ -227,7 +246,11 @@ public class ProxyService {
         HttpURLConnection urlConnection = openConnection(url, headers);
         urlConnection.setRequestMethod(request.getMethod());
         response.setStatus(urlConnection.getResponseCode());
-        urlConnection.getHeaderFields().forEach((key, value) -> response.setHeader(key, value.get(0)));
+        urlConnection.getHeaderFields().forEach((key, value) -> {
+            if (key != null && value != null && !value.isEmpty()) {
+                response.setHeader(key, value.get(0));
+            }
+        });
         copyAndCloseInput(urlConnection.getInputStream(), response.getOutputStream());
     }
 
@@ -251,7 +274,9 @@ public class ProxyService {
         HttpURLConnection urlConnection = (HttpURLConnection) url.openConnection();
         if (headers != null) {
             for (Map.Entry<String, String> entry : headers.entrySet()) {
-                urlConnection.setRequestProperty(entry.getKey(), entry.getValue());
+                if (!isHopByHopRequestHeader(entry.getKey())) {
+                    urlConnection.setRequestProperty(entry.getKey(), entry.getValue());
+                }
             }
         }
         return urlConnection;
