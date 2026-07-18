@@ -38,7 +38,15 @@ public class AtvpScriptService {
 
     public String version() {
         SecspiderKeyService.KeyStatus keyStatus = secspiderKeyService.ensureKeyMaterial();
-        String material = String.join("|", keyStatus.publicKeyChunks())
+        String script;
+        try {
+            script = readBundledAtvp();
+        } catch (IOException e) {
+            script = "";
+        }
+        String material = DigestUtils.sha256Hex(script)
+                + "\n"
+                + String.join("|", keyStatus.publicKeyChunks())
                 + "\n"
                 + String.join("|", keyStatus.masterSecretChunks());
         return DigestUtils.sha256Hex(material).substring(0, 12);

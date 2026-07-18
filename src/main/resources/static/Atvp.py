@@ -10,7 +10,7 @@ import types
 from abc import ABCMeta, abstractmethod
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 from xml.etree import ElementTree
 
 import requests
@@ -194,6 +194,7 @@ class Spider(HostSpider):
         self._play_context_cache = {}
         self._filters = []
         self._secspider_loader = "auto"
+        self._category_mode = False
 
     def init(self, extend=""):
         self.extend = extend or ""
@@ -201,8 +202,9 @@ class Spider(HostSpider):
         source, inner_extend = self._split_ext(self.extend)
         self._backend_api = self._resolve_backend_api(source, payload)
         self._vod_token = self._resolve_vod_token(payload)
-        self._localProxyConfig = payload.get("local_proxy_config") if isinstance(payload, dict) else {}
+        self._localProxyConfig = self._resolve_local_proxy_config(payload)
         self._secspider_loader = self._resolve_secspider_loader(payload)
+        self._category_mode = self._resolve_category_mode(payload)
         package_text = self._load_source(source)
         source_text = self._decrypt_secspider_source(package_text)
         spider_cls = self._load_inner_spider_class(source_text)
@@ -219,7 +221,7 @@ class Spider(HostSpider):
     def _category_mode_enabled(self):
         if self._inner is None:
             return False
-        return bool(getattr(self._inner, "backend_parse", False))
+        return self._category_mode or bool(getattr(self._inner, "backend_parse", False))
 
     def _split_ext(self, extend):
         raw = str(extend or "").strip()
@@ -247,13 +249,17 @@ class Spider(HostSpider):
 
     def _compose_inner_extend(self, payload):
         data_value = payload.get("data")
-        token_value = str(payload.get("token") or "").strip()
-        proxy_value = str(payload.get("local_proxy_config") or "").strip()
-
         extras = {}
-        if token_value:
-            extras["token"] = token_value
-        if proxy_value:
+        for key in ("api", "token", "api_key", "apikey", "alist_tvbox_api", "alist_tvbox_token", "alist_tvbox_api_key"):
+            value = payload.get(key)
+            if value is None:
+                continue
+            if isinstance(value, str):
+                value = value.strip()
+            if value != "":
+                extras[key] = value
+        proxy_value = payload.get("local_proxy_config")
+        if proxy_value not in (None, ""):
             extras["local_proxy_config"] = proxy_value
 
         if data_value is None or data_value == "":
@@ -311,6 +317,46 @@ class Spider(HostSpider):
             or "auto"
         ).strip().lower()
         return value or "auto"
+
+    def _resolve_category_mode(self, payload):
+        if not isinstance(payload, dict):
+            return False
+
+        def _as_bool(value):
+            if isinstance(value, bool):
+                return value
+            if value is None:
+                return False
+            return str(value).strip().lower() in ("1", "true", "yes", "on")
+
+        for key in ("category_mode", "categoryMode", "backend_parse", "backendParse"):
+            if key in payload:
+                return _as_bool(payload.get(key))
+
+        data_value = payload.get("data")
+        if isinstance(data_value, str):
+            try:
+                data_value = json.loads(data_value)
+            except Exception:
+                data_value = None
+        if isinstance(data_value, dict):
+            for key in ("category_mode", "categoryMode", "backend_parse", "backendParse"):
+                if key in data_value:
+                    return _as_bool(data_value.get(key))
+        return False
+
+    def _resolve_local_proxy_config(self, payload):
+        if not isinstance(payload, dict):
+            return {}
+        value = payload.get("local_proxy_config")
+        if value in (None, ""):
+            value = payload.get("localProxyConfig")
+        if isinstance(value, str):
+            try:
+                value = json.loads(value)
+            except Exception:
+                return {}
+        return value if isinstance(value, dict) else {}
 
     def _build_backend_endpoint(self, path):
         backend_api = str(self._backend_api or "").rstrip("/")
@@ -615,6 +661,7 @@ class Spider(HostSpider):
         return spider_cls
 
     def _load_inner_spider_class(self, source_text):
+        source_text = self._sanitize_inner_source(source_text)
         module = types.ModuleType("atvp_inner_spider")
         module.__file__ = "<atvp-inner>"
         exec(compile(source_text, module.__file__, "exec"), module.__dict__)
@@ -622,6 +669,10 @@ class Spider(HostSpider):
         if spider_cls is None:
             raise ValueError("Atvp inner source does not export Spider")
         return self._patch_inner_spider_html(spider_cls)
+
+    def _sanitize_inner_source(self, source_text):
+        text = str(source_text or "")
+        return text.lstrip("\ufeff").replace("\x00", "")
 
     def _load_filter_source(self, source):
         target = str(source or "").strip()
@@ -783,6 +834,39 @@ class Spider(HostSpider):
             return value
         return None
 
+    def _is_magnet_play_id(self, play_id):
+        value = str(play_id or "").strip().lower()
+        return value.startswith("magnet:") or value.startswith("ed2k:")
+
+    def _extract_magnet_hash(self, value):
+        text = str(value or "").strip()
+        match = re.search(r"btih:([a-fA-F0-9]{32,40})", text, re.I)
+        if match:
+            return match.group(1).lower()
+        match = re.search(r"/([a-fA-F0-9]{32,40})\.torrent(?:[?#]|$)", text, re.I)
+        if match:
+            return match.group(1).lower()
+        if re.fullmatch(r"[a-fA-F0-9]{32,40}", text):
+            return text.lower()
+        return ""
+
+    def _restore_original_magnet_id(self, play_id):
+        value = str(play_id or "").strip()
+        if not value.lower().startswith("magnet:///"):
+            return value
+        target_hash = self._extract_magnet_hash(value)
+        if not target_hash:
+            return value
+        for cached_id, cached_context in self._play_context_cache.items():
+            candidate = str(cached_context.get("play_id") or cached_id or "").strip()
+            if not candidate.lower().startswith("magnet:?"):
+                continue
+            if self._extract_magnet_hash(candidate) == target_hash:
+                self.log(f"Atvp restored expanded torrent id to magnet: {target_hash}")
+                return candidate
+        self.log(f"Atvp restored expanded torrent id from hash: {target_hash}")
+        return f"magnet:?xt=urn:btih:{target_hash}"
+
     def _encode_category_id(self, vod_id):
         return self.DETAIL_PREFIX + vod_id
 
@@ -798,6 +882,7 @@ class Spider(HostSpider):
         parsed_result = self._merge_cached_detail_result(share_url, parsed_result)
         parsed_result = self._run_filters("parse", parsed_result, {"share_url": share_url})
         parsed_result = self._run_filters("detail", parsed_result, {"share_url": share_url, "source": "parse"})
+        parsed_result = self._sort_detail_play_items(parsed_result)
         self._cache_detail_result(parsed_result)
         self._cache_play_context(parsed_result)
         return parsed_result
@@ -941,19 +1026,200 @@ class Spider(HostSpider):
         ]
         return payload
 
+    def _parse_size_bytes(self, text):
+        match = re.search(r"([\d.]+)\s*(TB|GB|MB|KB|B)", str(text or ""), re.I)
+        if not match:
+            return 0
+        try:
+            value = float(match.group(1))
+        except Exception:
+            return 0
+        unit = match.group(2).upper()
+        units = {
+            "B": 1,
+            "KB": 1024,
+            "MB": 1024 ** 2,
+            "GB": 1024 ** 3,
+            "TB": 1024 ** 4,
+        }
+        return int(value * units.get(unit, 1))
+
+    def _play_item_sort_key(self, episode):
+        label, _, target = str(episode or "").partition("$")
+        text = f"{label} {target}".lower()
+        size = self._parse_size_bytes(label)
+        subtitle_rank = 0 if re.search(r"字幕|中字|中文字幕|chs|cht|sub", text, re.I) else 1
+        junk = bool(re.search(r"广告|直播|社区|社\s*區|游戏|遊戲|最新地址|防屏蔽|996gg|uu美少女", text, re.I))
+        junk_rank = 1 if junk and size < 500 * 1024 ** 2 else 0
+        return (subtitle_rank, junk_rank, -size, label)
+
+    def _sort_detail_play_items(self, detail_result):
+        vod_list = detail_result.get("list") if isinstance(detail_result, dict) else None
+        if not isinstance(vod_list, list):
+            return detail_result
+
+        changed = False
+        sorted_vods = []
+        for vod in vod_list:
+            if not isinstance(vod, dict):
+                sorted_vods.append(vod)
+                continue
+            play_url_value = str(vod.get("vod_play_url") or "")
+            if "#" not in play_url_value:
+                sorted_vods.append(vod)
+                continue
+            groups = []
+            group_changed = False
+            for group in play_url_value.split("$$$"):
+                episodes = [episode for episode in str(group or "").split("#") if episode]
+                if len(episodes) <= 1:
+                    groups.append(group)
+                    continue
+                ordered = sorted(episodes, key=self._play_item_sort_key)
+                group_changed = group_changed or ordered != episodes
+                groups.append("#".join(ordered))
+            if group_changed:
+                item = dict(vod)
+                item["vod_play_url"] = "$$$".join(groups)
+                sorted_vods.append(item)
+                changed = True
+            else:
+                sorted_vods.append(vod)
+        if not changed:
+            return detail_result
+        payload = dict(detail_result)
+        payload["list"] = sorted_vods
+        return payload
+
+    def _build_direct_play_detail(self, play_id):
+        context = self._lookup_play_context(play_id)
+        label = str(context.get("episode_name") or context.get("play_from") or "播放").strip()
+        vod_name = str(context.get("vod_name") or label or "播放").strip()
+        play_from = str(context.get("play_from") or "磁力").strip()
+        return {
+            "list": [{
+                "vod_id": play_id,
+                "vod_name": vod_name,
+                "vod_pic": context.get("vod_pic", ""),
+                "vod_year": context.get("vod_year", ""),
+                "vod_remarks": context.get("vod_remarks", ""),
+                "type_name": context.get("type_name", ""),
+                "vod_content": vod_name,
+                "vod_play_from": play_from,
+                "vod_play_url": f"{label}${play_id}",
+            }]
+        }
+
+    def _is_local_proxy_player_candidate(self, result):
+        if not isinstance(result, dict):
+            return False
+        url_value = result.get("url")
+        if isinstance(url_value, (list, tuple)):
+            return False
+        url_text = str(url_value or "").strip()
+        if not url_text or url_text.startswith(("http://localhost:", "https://localhost:")):
+            return False
+        type_text = str(result.get("type") or "").strip().upper()
+        return type_text in {
+            "ALI", "QUARK", "UC", "PAN115", "PAN123", "PAN139", "CLOUD189", "BAIDU", "GUANGYA"
+        }
+
+    def _prepare_local_proxy_player_payload(self, result):
+        if not self._is_local_proxy_player_candidate(result):
+            return result
+        payload = dict(result)
+        if payload.get("parse") == 0:
+            payload.pop("parse", None)
+        return payload
+
+    def _finalize_local_proxy_player_payload(self, result):
+        if not isinstance(result, dict):
+            return result
+        url_text = str(result.get("url") or "").strip()
+        if url_text.startswith(("http://localhost:", "https://localhost:")):
+            payload = dict(result)
+            payload["parse"] = 0
+            payload["jx"] = 0
+            payload.setdefault("playUrl", "")
+            return payload
+        return result
+
+    def _proxy_player_content(self, result, task_seed, context=None):
+        if not isinstance(result, dict):
+            return result
+        proxy_payload = self._prepare_local_proxy_player_payload(result)
+        if not self._localProxyConfig:
+            return proxy_payload
+        url_value = result.get("url")
+        if isinstance(url_value, (list, tuple)):
+            return result
+        url_text = str(url_value or "").strip()
+        if not url_text or url_text.startswith(("http://localhost:", "https://localhost:")):
+            return result
+        try:
+            type_text = str(result.get("type") or "").strip()
+            self.log(
+                f"Atvp local proxy player candidate: type={type_text}, config_keys={','.join(sorted(self._localProxyConfig.keys()))}"
+            )
+            proxy = self.post(
+                "http://localhost:5000/player",
+                json={
+                    "playerContent": json.dumps(proxy_payload, ensure_ascii=False),
+                    "taskSeed": str(task_seed or url_text),
+                    "localProxyConfig": self._localProxyConfig,
+                },
+                timeout=10,
+            )
+            if proxy.status_code == 200:
+                proxy_body = str(proxy.text or "").strip()
+                if proxy_body:
+                    proxied = self._finalize_local_proxy_player_payload(proxy.json())
+                    if isinstance(proxied, dict) and str(proxied.get("url") or "").startswith(("http://localhost:", "https://localhost:")):
+                        self.log("Atvp local proxy player ok")
+                    return proxied
+            self.log(f"Atvp local proxy player skipped: status={proxy.status_code}")
+        except Exception as e:
+            self.log(f"Atvp local proxy player failed: {e}")
+        return proxy_payload
+
     def _play(self, play_id):
         rsp = self.fetch(
             self._build_backend_endpoint("play"),
-            params={"id": str(play_id or "")},
+            params={"id": str(play_id or ""), "from": "jar", "type": "client-proxy"},
             timeout=10,
         )
         body = str(rsp.text or "")
         if rsp.status_code != 200 or not body.strip():
             raise ValueError(f"Atvp play failed: {play_id}")
-        # proxy = self.post("http://localhost:5000/player", json={"playerContent": body, "taskSeed": play_id, "localProxyConfig": self._localProxyConfig}, timeout=10)
-        # if proxy.status_code == 200:
-        #     return proxy.json()
-        return self._run_filters("play", json.loads(body), self._build_player_context(play_id=play_id))
+        result = json.loads(body)
+        context = self._build_player_context(play_id=play_id)
+        result = self._proxy_player_content(result, play_id, context)
+        return self._run_filters("play", result, self._build_player_context(play_id=play_id))
+
+    def _extract_backend_play_id(self, url_value):
+        value = str(url_value or "").strip()
+        if not value:
+            return ""
+        try:
+            backend = str(self._backend_api or "").rstrip("/")
+            token = str(self._vod_token or "").strip()
+            if not backend or not token:
+                return ""
+            parsed = urlsplit(value)
+            if not parsed.scheme and value.startswith("/"):
+                parsed = urlsplit(backend + value)
+            backend_parsed = urlsplit(backend)
+            if parsed.scheme and backend_parsed.scheme and parsed.scheme.lower() != backend_parsed.scheme.lower():
+                return ""
+            if parsed.netloc and backend_parsed.netloc and parsed.netloc.lower() != backend_parsed.netloc.lower():
+                return ""
+            prefix = f"/p/{token}/"
+            path = unquote(parsed.path or "")
+            if not path.startswith(prefix):
+                return ""
+            return path[len(prefix):].strip()
+        except Exception:
+            return ""
 
     def _empty_category_result(self):
         return {
@@ -989,18 +1255,27 @@ class Spider(HostSpider):
 
         items = []
         for index, (from_group, url_group) in enumerate(zip(from_groups, url_groups), start=1):
-            label, _, target = str(url_group or "").partition("$")
-            if target.startswith(self.PUSH_PREFIX):
-                target = target[len(self.PUSH_PREFIX):]
-            line_name = from_group or label
-            item = {
-                "vod_id": target,
-                "vod_name": line_name,
-                "vod_pic": vod.get("vod_pic", ""),
-                "vod_remarks": vod.get("vod_remarks", ""),
-                "vod_tag": "file",
-            }
-            items.append(item)
+            episodes = [episode.strip() for episode in str(url_group or "").split("#") if episode.strip()]
+            for episode_index, episode in enumerate(episodes, start=1):
+                if "$" in episode:
+                    label, target = episode.split("$", 1)
+                else:
+                    label, target = "", episode
+                label = str(label or "").strip()
+                target = str(target or "").strip()
+                if not target:
+                    continue
+                if target.startswith(self.PUSH_PREFIX):
+                    target = target[len(self.PUSH_PREFIX):]
+                line_name = label or from_group or f"线路{index}-{episode_index}"
+                item = {
+                    "vod_id": target,
+                    "vod_name": line_name,
+                    "vod_pic": vod.get("vod_pic", ""),
+                    "vod_remarks": vod.get("vod_remarks", ""),
+                    "vod_tag": "file",
+                }
+                items.append(item)
         vod = {
             "list": items,
             "page": 1,
@@ -1058,8 +1333,11 @@ class Spider(HostSpider):
     def detailContent(self, ids):
         print('detailContent', ids)
         if isinstance(ids, (list, tuple)) and len(ids) == 1:
+            value = str(ids[0] or "").strip()
+            if value.startswith(self.DETAIL_PREFIX):
+                ids = [value[len(self.DETAIL_PREFIX):]]
             share_url = self._decode_parse(ids[0])
-            if share_url is not None:
+            if share_url is not None and not self._category_mode_enabled():
                 return self._parse(share_url)
         result = self._require_inner().detailContent(ids)
         result = self._run_filters("detail", result, {"ids": ids})
@@ -1157,6 +1435,24 @@ class Spider(HostSpider):
         else:
             result = self._require_inner().playerContent(flag, id, vipFlags)
             result = self._normalize_player_content(result)
+            if (self._is_magnet_play_id(vid) and isinstance(result, dict)
+                    and not str(result.get("url") or "").strip()):
+                result["parse"] = 0
+                result["jx"] = 0
+                result["playUrl"] = ""
+                result["url"] = self._restore_original_magnet_id(vid)
+                result.setdefault("header", {})
+            if isinstance(result, dict):
+                url_value = str(result.get("url") or "").strip()
+                restored_url = self._restore_original_magnet_id(url_value)
+                if restored_url != url_value:
+                    result["url"] = restored_url
+                backend_play_id = self._extract_backend_play_id(result.get("url"))
+                if backend_play_id:
+                    self.log(f"Atvp backend /p url converted to client-proxy play: {backend_play_id}")
+                    result = self._play(backend_play_id)
+            context = self._build_player_context(flag, id, vipFlags)
+            result = self._proxy_player_content(result, result.get("url") if isinstance(result, dict) else vid, context)
         return self._run_filters("player", result, self._build_player_context(flag, id, vipFlags))
 
     def liveContent(self, url):
