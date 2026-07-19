@@ -1,0 +1,80 @@
+name: Sync upstream into custom branch
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_branch:
+        description: Branch in this fork to receive upstream merges
+        required: true
+        default: codex/publish-pure-secspider-20260718
+      upstream_branch:
+        description: Upstream branch to merge from
+        required: true
+        default: master
+      push_after_merge:
+        description: Push the merged branch back to origin
+        required: true
+        type: boolean
+        default: true
+  schedule:
+    - cron: '17 2 * * *'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sync-upstream-preserve-custom
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout fork branch
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.target_branch || 'codex/publish-pure-secspider-20260718' }}
+
+      - name: Configure git identity
+        run: |
+          git config user.name "codex-sync-bot"
+          git config user.email "codex-sync-bot@users.noreply.github.com"
+          git config rerere.enabled true
+          git config rerere.autoupdate true
+
+      - name: Add upstream remote
+        run: |
+          git remote add upstream https://github.com/power721/alist-tvbox.git || true
+          git remote -v
+
+      - name: Preview branch state
+        run: |
+          git status --short --branch
+          git branch --show-current
+          git log --oneline --decorate -n 5
+
+      - name: Merge upstream
+        env:
+          TARGET_BRANCH: ${{ github.event_name == 'workflow_dispatch' && inputs.target_branch || 'codex/publish-pure-secspider-20260718' }}
+          UPSTREAM_BRANCH: ${{ github.event_name == 'workflow_dispatch' && inputs.upstream_branch || 'master' }}
+        run: |
+          git fetch upstream --prune
+          git fetch origin --prune
+          git merge --no-ff --no-edit "upstream/${UPSTREAM_BRANCH}" || {
+            echo "Merge conflict detected. Resolve locally, then rerun the workflow." >&2
+            git status --short --branch
+            exit 2
+          }
+
+      - name: Push merged branch
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.push_after_merge }}
+        env:
+          TARGET_BRANCH: ${{ github.event_name == 'workflow_dispatch' && inputs.target_branch || 'codex/publish-pure-secspider-20260718' }}
+        run: |
+          git push origin HEAD:${TARGET_BRANCH}
+
+      - name: Show result
+        run: |
+          git status --short --branch
+          git log --oneline --decorate -n 3
