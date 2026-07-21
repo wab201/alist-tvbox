@@ -42,6 +42,10 @@ test('exposes compatibility gate entry in the plugin compiler dialog', () => {
   assert.equal(viewSource.includes('先点“兼容性校验”打开独立门禁窗口'), true)
 })
 
+test('accepts encrypted txt and raw Python plugin addresses', () => {
+  assert.equal(viewSource.includes('placeholder="https://example.com/plugin.txt 或 plugin.py"'), true)
+})
+
 test('uses visual editor for subscription override instead of raw textarea', () => {
   assert.equal(viewSource.includes('SubscriptionConfigEditor'), true)
   assert.equal(viewSource.includes("openEditor(false)"), true)

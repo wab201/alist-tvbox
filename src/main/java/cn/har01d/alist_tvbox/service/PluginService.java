@@ -188,7 +188,10 @@ public class PluginService {
 
             try {
                 Plugin existing = findExistingPlugin(normalizedPluginUrl, entry.externalId());
-                if (existing != null && entry.version() != null && entry.version().equals(existing.getVersion())) {
+                boolean samePluginType = existing != null
+                        && isPythonPluginUrl(existing.getUrl()) == isPythonPluginUrl(normalizedPluginUrl);
+                if (existing != null && samePluginType
+                        && entry.version() != null && entry.version().equals(existing.getVersion())) {
                     backfillImportMetadata(existing, normalizedPluginUrl, entry.externalId());
                     skipped.add(normalizedPluginUrl);
                     continue;
@@ -379,7 +382,7 @@ public class PluginService {
     }
 
     private List<String> resolveImportCandidates(String url) {
-        String source = StringUtils.trimToEmpty(url);
+        String source = Utils.toAsciiUrl(StringUtils.trimToEmpty(url));
         if (source.isBlank()) {
             throw new BadRequestException("仓库地址不能为空");
         }
@@ -418,6 +421,7 @@ public class PluginService {
     }
 
     private DownloadedPlugin downloadPluginData(String url) {
+        url = Utils.toAsciiUrl(url);
         String body = downloadPlugin(url);
         String name = extractPluginName(body);
         if (StringUtils.isBlank(name)) {
@@ -427,6 +431,7 @@ public class PluginService {
     }
 
     private String downloadText(String url, String message) {
+        url = Utils.toAsciiUrl(url);
         // Validate URL to prevent SSRF attacks
         if (!isValidUrl(url)) {
             throw new BadRequestException("Invalid or unsafe URL: " + url);
@@ -516,7 +521,15 @@ public class PluginService {
     }
 
     String deriveSourceName(String url) {
-        String raw = url.substring(url.lastIndexOf('/') + 1);
+        String source = url;
+        try {
+            String path = URI.create(url).getRawPath();
+            if (StringUtils.isNotBlank(path)) {
+                source = path;
+            }
+        } catch (Exception ignored) {
+        }
+        String raw = source.substring(source.lastIndexOf('/') + 1);
         String decoded = URLDecoder.decode(raw, StandardCharsets.UTF_8);
         int dot = decoded.lastIndexOf('.');
         return dot > 0 ? decoded.substring(0, dot) : decoded;
@@ -557,7 +570,7 @@ public class PluginService {
     }
 
     private String resolvePluginUrl(String sourceUrl, String path) {
-        String candidate = StringUtils.trimToEmpty(path);
+        String candidate = Utils.toAsciiUrl(StringUtils.trimToEmpty(path));
         if (candidate.isBlank()) {
             throw new BadRequestException(PLUGIN_INDEX_FILE + " 格式不正确");
         }
@@ -608,6 +621,15 @@ public class PluginService {
             return url;
         }
         return StringUtils.appendIfMissing(proxy, "/") + url;
+    }
+
+    static boolean isPythonPluginUrl(String url) {
+        try {
+            String path = URI.create(StringUtils.trimToEmpty(url)).getPath();
+            return StringUtils.endsWithIgnoreCase(path, ".py");
+        } catch (Exception e) {
+            return false;
+        }
     }
 
     private void applyDownloadedPlugin(Plugin plugin, DownloadedPlugin downloadedPlugin, String entryExternalId, boolean updateName) {

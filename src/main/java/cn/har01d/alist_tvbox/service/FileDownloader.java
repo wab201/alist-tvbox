@@ -49,8 +49,7 @@ public class FileDownloader {
     private static final String REMOTE_DIFF_ZIP_URL = BASE_URL + "diff.zip";
     private static final String PG_LATEST_URL = "https://github.com/power721/PG/releases/latest";
     private static final String ZX_LATEST_URL = "https://github.com/power721/ZX/releases/latest";
-    private static final String XS_VERSION_URL = "https://9877.kstore.space/version.txt";
-    private static final String XS_SINGLE_URL = "https://9877.kstore.space/single.json";
+    private static final String XS_INDEX_URL = BASE_URL + "xs.txt";
     private static final String XS_USER_AGENT = "okhttp/5.3.2";
 
     private static final Set<String> GITHUB_PROXY = Set.of("https://slink.ltd/", "https://cors.zme.ink/", "https://git.886.be/", "https://gitdl.cn/", "https://ghfast.top/", "https://ghproxy.net/", "https://github.moeyy.xyz/", "https://gh-proxy.com/", "https://ghproxy.cc/", "https://gh.llkk.cc/", "https://gh.ddlc.top/", "https://gh-proxy.llyke.com/");
@@ -323,15 +322,15 @@ public class FileDownloader {
 
     public String getXsVersion() {
         try {
-            return getRemoteText(XS_VERSION_URL, XS_USER_AGENT).trim();
-        } catch (IOException e) {
-            log.warn("getXsVersion IOException", e);
+            return getRemoteText(deriveVersionUrl(resolveXsSingleUrl()), XS_USER_AGENT).trim();
+        } catch (Exception e) {
+            log.warn("getXsVersion failed", e);
         }
         return "";
     }
 
     private String getXsDownloadUrl() throws IOException {
-        String json = getRemoteText(XS_SINGLE_URL, XS_USER_AGENT);
+        String json = getRemoteText(resolveXsSingleUrl(), XS_USER_AGENT);
         var root = objectMapper.readTree(json);
         for (var section : root) {
             if ("本地包".equals(section.path("name").asText())) {
@@ -346,6 +345,27 @@ public class FileDownloader {
             }
         }
         throw new IOException("Cannot find xs download url from single.json");
+    }
+
+    static String deriveVersionUrl(String singleUrl) {
+        int idx = singleUrl.lastIndexOf('/');
+        return (idx >= 0 ? singleUrl.substring(0, idx) : singleUrl) + "/version.txt";
+    }
+
+    static String parseXsSingleUrl(String text) {
+        if (text != null) {
+            for (String line : text.split("\\R")) {
+                String s = line.trim();
+                if (!s.isEmpty()) {
+                    return s;
+                }
+            }
+        }
+        throw new IllegalStateException("xs.txt 内容为空");
+    }
+
+    private String resolveXsSingleUrl() throws IOException {
+        return parseXsSingleUrl(getRemoteText(XS_INDEX_URL, XS_USER_AGENT));
     }
 
     private String getGitHubVersion(String name, String url, Pattern pattern) {

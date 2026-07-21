@@ -165,4 +165,93 @@ class SubscriptionServiceTest {
         List<Map<String, Object>> parses = (List<Map<String, Object>>) catalog.get("parses");
         assertThat(parses).extracting(p -> p.get("name")).containsExactly("虾米");
     }
+
+    @Test
+    void rawPythonPluginShouldUsePyProxyLoaderAndLocalProxyInEveryRunMode() {
+        Plugin plugin = new Plugin();
+        plugin.setId(7);
+        plugin.setUrl("https://example.com/demo.py?raw=1");
+        plugin.setExtend("{\"site\":\"demo\"}");
+        Map<String, Object> localProxyConfig = new HashMap<>();
+        localProxyConfig.put("ALI", Map.of("enabled", true));
+
+        Map<String, Object> payload = SubscriptionService.buildPluginExtPayload(
+                plugin, "http://atv", "web", "vod-token", "secret", true, localProxyConfig);
+
+        assertThat(SubscriptionService.selectPluginApi(plugin, true, "http://atv"))
+                .isEqualTo("csp_PyProxy");
+        assertThat(SubscriptionService.selectPluginApi(plugin, false, "http://atv"))
+                .isEqualTo("csp_PyProxy");
+        assertThat(payload)
+                .containsEntry("loader", "http://atv/Atvp.py")
+                .containsEntry("source", "http://atv/plugins/web/7.py")
+                .containsEntry("raw", true)
+                .containsEntry("api", "http://atv")
+                .containsEntry("token", "vod-token")
+                .containsEntry("secret", "secret")
+                .containsEntry("data", "{\"site\":\"demo\"}")
+                .containsEntry("local_proxy_config", localProxyConfig);
+        assertThat(payload.get("loader")).isNotEqualTo("http://atv/plugins/web/7.py");
+    }
+
+    @Test
+    void encryptedTxtPluginShouldKeepSourceAndNativePythonModeBehavior() {
+        Plugin plugin = new Plugin();
+        plugin.setId(8);
+        plugin.setUrl("https://example.com/demo.txt");
+        Map<String, Object> localProxyConfig = new HashMap<>();
+        localProxyConfig.put("ALI", Map.of("enabled", true));
+
+        Map<String, Object> payload = SubscriptionService.buildPluginExtPayload(
+                plugin, "http://atv", "web", "", "secret", true, localProxyConfig);
+
+        assertThat(SubscriptionService.selectPluginApi(plugin, true, "http://atv"))
+                .isEqualTo("http://atv/Atvp.py");
+        assertThat(SubscriptionService.selectPluginApi(plugin, false, "http://atv"))
+                .isEqualTo("csp_PyProxy");
+        assertThat(payload)
+                .containsEntry("source", "http://atv/plugins/web/8.txt")
+                .containsEntry("token", "-")
+                .doesNotContainKey("loader");
+        assertThat(payload.get("local_proxy_config"))
+                .isEqualTo(new HashMap<>());
+
+        Map<String, Object> javaPayload = SubscriptionService.buildPluginExtPayload(
+                plugin, "http://atv", "web", "", "secret", false, localProxyConfig);
+        assertThat(javaPayload.get("local_proxy_config")).isEqualTo(localProxyConfig);
+    }
+
+    @Test
+    void managedAtvpLoaderShouldApplyWithoutBreakingRawPythonRouting() {
+        String managedLoader = "http://atv/Atvp/vod-token/version.py";
+        Map<String, Object> localProxyConfig = Map.of("ALI", Map.of("enabled", true));
+
+        Plugin rawPlugin = new Plugin();
+        rawPlugin.setId(9);
+        rawPlugin.setUrl("https://example.com/demo.py");
+        Map<String, Object> rawPayload = SubscriptionService.buildPluginExtPayload(
+                rawPlugin, "http://atv", "web", "vod-token", "secret", true,
+                localProxyConfig, managedLoader, true);
+
+        assertThat(SubscriptionService.selectPluginApiWithLoader(rawPlugin, true, managedLoader))
+                .isEqualTo("csp_PyProxy");
+        assertThat(rawPayload)
+                .containsEntry("loader", managedLoader)
+                .containsEntry("source", "http://atv/plugins/web/9.py")
+                .containsEntry("raw", true);
+
+        Plugin encryptedPlugin = new Plugin();
+        encryptedPlugin.setId(10);
+        encryptedPlugin.setUrl("https://example.com/demo.txt");
+        Map<String, Object> encryptedPayload = SubscriptionService.buildPluginExtPayload(
+                encryptedPlugin, "http://atv", "web", "vod-token", "secret", true,
+                localProxyConfig, managedLoader, true);
+
+        assertThat(SubscriptionService.selectPluginApiWithLoader(encryptedPlugin, true, managedLoader))
+                .isEqualTo(managedLoader);
+        assertThat(encryptedPayload)
+                .containsEntry("loader", managedLoader)
+                .containsEntry("source", "http://atv/plugins/web/10.txt")
+                .doesNotContainKey("raw");
+    }
 }
