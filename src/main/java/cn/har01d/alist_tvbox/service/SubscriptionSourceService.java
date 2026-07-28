@@ -255,6 +255,7 @@ public class SubscriptionSourceService {
     private List<BuiltinDefinition> builtinDefinitions() {
         List<BuiltinDefinition> definitions = new ArrayList<>();
         int order = 1;
+        definitions.add(new BuiltinDefinition("csp_PianDan", "片单导航", order++));
         Site xiaoya = siteRepository.findById(1).orElse(null);
         if (xiaoya != null) {
             definitions.add(new BuiltinDefinition("csp_XiaoYa", xiaoya.getName(), order++));
@@ -278,6 +279,7 @@ public class SubscriptionSourceService {
         definitions.add(new BuiltinDefinition("csp_TgWeb", "电报网页", order++));
         if (StringUtils.isNotBlank(appProperties.getPanSouUrl())) {
             definitions.add(new BuiltinDefinition("csp_FishPanSou", "鱼佬盘搜", order));
+            definitions.add(new BuiltinDefinition("csp_FishPanSouGroup", "盘搜 • 分组", order++));
         }
         definitions.add(new BuiltinDefinition("csp_Push", "AT推送", order++));
         return definitions;
