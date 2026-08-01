@@ -74,6 +74,8 @@
       <span class="hint"></span>
       <span v-if="pgLocal==pgRemote"><el-icon color="green"><Check/></el-icon></span>
       <span v-else><el-icon color="orange"><Warning/></el-icon></span>
+      <span class="hint">自动更新：</span>
+      <el-switch v-model="autoUpdatePg" @change="saveAutoUpdate('auto_update_pg', autoUpdatePg)"/>
     </el-row>
 <!--    <el-row>-->
 <!--      真心全量包本地： {{ zxLocal2 }}-->
@@ -89,6 +91,8 @@
       <span class="hint"></span>
       <span v-if="zxLocal==zxRemote"><el-icon color="green"><Check/></el-icon></span>
       <span v-else><el-icon color="orange"><Warning/></el-icon></span>
+      <span class="hint">自动更新：</span>
+      <el-switch v-model="autoUpdateZx" @change="saveAutoUpdate('auto_update_zx', autoUpdateZx)"/>
     </el-row>
     <el-row>
       潇洒包本地： {{ xsLocal }}
@@ -97,6 +101,8 @@
       <span class="hint"></span>
       <span v-if="xsLocal==xsRemote"><el-icon color="green"><Check/></el-icon></span>
       <span v-else><el-icon color="orange"><Warning/></el-icon></span>
+      <span class="hint">自动更新：</span>
+      <el-switch v-model="autoUpdateXs" @change="saveAutoUpdate('auto_update_xs', autoUpdateXs)"/>
     </el-row>
     <el-row>
       <el-button @click="syncCat">同步文件</el-button>
@@ -614,6 +620,29 @@
       </template>
     </el-dialog>
 
+    <el-dialog v-model="panSouSourceVisible" :title="panSouSourceTitle" width="480px">
+      <el-form label-width="90px">
+        <el-form-item label="数据源">
+          <el-radio-group v-model="panSouSourceValue">
+            <el-radio v-for="item in panSouSourceOptions" :key="item.value" :value="item.value">{{ item.label }}</el-radio>
+          </el-radio-group>
+          <div class="ext-tip">选择「继承全局」则使用 PanSou 全局数据源设置。</div>
+        </el-form-item>
+        <el-form-item label="包含词">
+          <el-input v-model="panSouFilterInclude" placeholder="多个用逗号分隔，如 1080,4K；留空继承全局"/>
+        </el-form-item>
+        <el-form-item label="排除词">
+          <el-input v-model="panSouFilterExclude" placeholder="多个用逗号分隔，如 枪版,广告；留空继承全局"/>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <span class="dialog-footer">
+          <el-button @click="panSouSourceVisible = false">取消</el-button>
+          <el-button type="primary" @click="savePanSouSource">保存</el-button>
+        </span>
+      </template>
+    </el-dialog>
+
     <el-dialog v-model="pluginFilterVisible" title="过滤器管理" fullscreen>
       <el-form :inline="true" :model="pluginFilterForm">
         <el-form-item label="过滤器地址" required>
@@ -1051,6 +1080,9 @@ const zxLocal2 = ref('')
 const zxRemote2 = ref('')
 const xsLocal = ref('')
 const xsRemote = ref('')
+const autoUpdatePg = ref(true)
+const autoUpdateZx = ref(true)
+const autoUpdateXs = ref(true)
 const updateAction = ref(false)
 const dialogTitle = ref('')
 const jsonData = ref({})
@@ -1230,6 +1262,18 @@ const pianDanHomeOptions = [
   {label: '国内口碑综艺榜', value: 'show_chinese_best_weekly'}
 ]
 const pianDanHomeValues = new Set(pianDanHomeOptions.map(item => item.value))
+const panSouSourceVisible = ref(false)
+const panSouSourceTarget = ref<ManagedSource | null>(null)
+const panSouSourceValue = ref('')
+const panSouFilterInclude = ref('')
+const panSouFilterExclude = ref('')
+const panSouSourceTitle = computed(() => (panSouSourceTarget.value?.name || '盘搜') + ' · 设置')
+const panSouSourceOptions = [
+  {label: '继承全局', value: ''},
+  {label: '全部', value: 'all'},
+  {label: '电报', value: 'tg'},
+  {label: '插件', value: 'plugin'}
+]
 const pluginFilterForm = ref<PluginFilter>({
   id: 0,
   name: '',
@@ -2565,6 +2609,8 @@ const saveSourceExtend = () => {
 const openSourceConfig = (source: ManagedSource) => {
   if (source.builtin && source.key === 'csp_PianDan') {
     openPianDanHomeDialog(source)
+  } else if (source.builtin && (source.key === 'csp_FishPanSou' || source.key === 'csp_FishPanSouGroup')) {
+    openPanSouSourceDialog(source)
   } else {
     openSourceExtendDialog(source)
   }
@@ -2599,6 +2645,43 @@ const savePianDanHome = () => {
   pianDanHomeTarget.value.extend = JSON.stringify({home: pianDanHomeValue.value, mode: pianDanMode.value})
   updateSource(pianDanHomeTarget.value)
   pianDanHomeVisible.value = false
+}
+
+const openPanSouSourceDialog = (source: ManagedSource) => {
+  panSouSourceTarget.value = source
+  let sourceValue = ''
+  let include = ''
+  let exclude = ''
+  try {
+    const parsed = source.extend ? JSON.parse(source.extend) : null
+    if (parsed && typeof parsed === 'object') {
+      sourceValue = typeof parsed.source === 'string' ? parsed.source : ''
+      include = typeof parsed.filter_include === 'string' ? parsed.filter_include : ''
+      exclude = typeof parsed.filter_exclude === 'string' ? parsed.filter_exclude : ''
+    }
+  } catch {
+    sourceValue = ''
+  }
+  panSouSourceValue.value = sourceValue
+  panSouFilterInclude.value = include
+  panSouFilterExclude.value = exclude
+  panSouSourceVisible.value = true
+}
+
+const savePanSouSource = () => {
+  if (!panSouSourceTarget.value) {
+    return
+  }
+  const config: Record<string, string> = {
+    source: panSouSourceValue.value,
+    filter_include: panSouFilterInclude.value,
+    filter_exclude: panSouFilterExclude.value
+  }
+  // drop blank fields so they inherit the global config
+  const payload = Object.fromEntries(Object.entries(config).filter(([, v]) => v !== ''))
+  panSouSourceTarget.value.extend = Object.keys(payload).length ? JSON.stringify(payload) : ''
+  updateSource(panSouSourceTarget.value)
+  panSouSourceVisible.value = false
 }
 
 const updatePluginFilter = (filter: PluginFilter) => {
@@ -2810,6 +2893,12 @@ const syncCat = () => {
   })
 }
 
+const saveAutoUpdate = (name: string, value: boolean) => {
+  axios.post('/api/settings', {name, value: String(value)}).then(() => {
+    ElMessage.success(value ? '已开启自动更新' : '已关闭自动更新')
+  })
+}
+
 const load = () => {
   console.log('📋 开始加载订阅列表')
   console.time('load-subscriptions')
@@ -2850,6 +2939,15 @@ const loadVersion = () => {
   axios.get("/xs/version").then(({data}) => {
     xsLocal.value = data.local
     xsRemote.value = data.remote
+  })
+  axios.get('/api/settings/auto_update_pg').then(({data}) => {
+    autoUpdatePg.value = data?.value !== 'false'
+  })
+  axios.get('/api/settings/auto_update_zx').then(({data}) => {
+    autoUpdateZx.value = data?.value !== 'false'
+  })
+  axios.get('/api/settings/auto_update_xs').then(({data}) => {
+    autoUpdateXs.value = data?.value !== 'false'
   })
 }
 
