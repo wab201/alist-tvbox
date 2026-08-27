@@ -18,6 +18,9 @@ import org.springframework.http.converter.json.MappingJackson2HttpMessageConvert
 import org.springframework.test.web.client.MockRestServiceServer;
 import org.springframework.web.client.RestTemplate;
 
+import org.jsoup.Jsoup;
+
+import java.time.Instant;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -375,6 +378,128 @@ class TelegramServiceTest {
 
         service.validateChannels();
 
+        server.verify();
+    }
+
+    @Test
+    void parseWebMessagesParsesIdTextTimeAndCover() {
+        TelegramService service = createService(new AppProperties(), new RestTemplate(), mock(TelegramChannelRepository.class));
+
+        var messages = service.parseWebMessages(Jsoup.parse("""
+                <div class="tgme_container"><div class="tgme_widget_message_wrap">
+                  <a class="tgme_widget_message_photo_wrap" style="width:320px;background-image:url('https://cdn.example/a.jpg')"></a>
+                  <div class="tgme_widget_message" data-post="chan/101">
+                    <div class="tgme_widget_message_text">标题 https://pan.quark.cn/s/abc</div>
+                    <time datetime="2026-08-24T10:00:00Z"></time>
+                  </div>
+                </div></div>
+                """), "chan");
+
+        assertThat(messages).hasSize(1);
+        assertThat(messages.getFirst().getId()).isEqualTo(101);
+        assertThat(messages.getFirst().getChannel()).isEqualTo("chan");
+        assertThat(messages.getFirst().getContent()).contains("pan.quark.cn");
+        assertThat(messages.getFirst().getTime()).isEqualTo(Instant.parse("2026-08-24T10:00:00Z"));
+        assertThat(messages.getFirst().getCover()).isEqualTo("https://cdn.example/a.jpg");
+    }
+
+    @Test
+    void parseWebMessagesSkipsWrapWithoutInnerMessageNode() {
+        TelegramService service = createService(new AppProperties(), new RestTemplate(), mock(TelegramChannelRepository.class));
+
+        var messages = service.parseWebMessages(Jsoup.parse("""
+                <div class="tgme_container">
+                  <div class="tgme_widget_message_wrap"></div>
+                  <div class="tgme_widget_message_wrap">
+                    <div class="tgme_widget_message" data-post="chan/102">
+                      <div class="tgme_widget_message_text">https://pan.quark.cn/s/def</div>
+                    </div>
+                  </div>
+                </div>
+                """), "chan");
+
+        assertThat(messages).extracting(cn.har01d.alist_tvbox.dto.tg.Message::getId).containsExactly(102);
+    }
+
+    @Test
+    void parseWebMessagesSkipsMalformedDataPost() {
+        TelegramService service = createService(new AppProperties(), new RestTemplate(), mock(TelegramChannelRepository.class));
+
+        var messages = service.parseWebMessages(Jsoup.parse("""
+                <div class="tgme_container">
+                  <div class="tgme_widget_message_wrap">
+                    <div class="tgme_widget_message" data-post="no-separator"></div>
+                  </div>
+                  <div class="tgme_widget_message_wrap">
+                    <div class="tgme_widget_message" data-post="chan/not-a-number"></div>
+                  </div>
+                </div>
+                """), "chan");
+
+        assertThat(messages).isEmpty();
+    }
+
+    @Test
+    void listDoubanWebRewritesCoverToRelativeImageProxy() {
+        RestTemplate restTemplate = new RestTemplate();
+        MockRestServiceServer server = MockRestServiceServer.bindTo(restTemplate).build();
+        TelegramService service = createService(new AppProperties(), restTemplate, mock(TelegramChannelRepository.class));
+        String body = """
+                {"total":1,"items":[{"id":"36810153","title":"测试剧",
+                  "pic":{"normal":"https://img3.doubanio.com/view/photo/s_ratio_poster/public/p1.jpg"},
+                  "rating":{"count":100,"value":7.5}}]}
+                """;
+
+        server.expect(once(), request -> assertThat(request.getURI().getPath()).endsWith("/subject/recent_hot/tv"))
+                .andRespond(withSuccess(body, MediaType.APPLICATION_JSON));
+        server.expect(once(), request -> assertThat(request.getURI().getPath()).endsWith("/subject/recent_hot/tv"))
+                .andRespond(withSuccess(body, MediaType.APPLICATION_JSON));
+
+        var webResult = service.listDouban("hot_tv", "web", null, null, null, null, 1, 20);
+        var spiderResult = service.listDouban("hot_tv", null, null, null, null, null, 1, 20);
+
+        assertThat(webResult.getList()).singleElement().satisfies(movie ->
+                assertThat(movie.getVod_pic()).isEqualTo("/images?url=https://img3.doubanio.com/view/photo/s_ratio_poster/public/p1.jpg"));
+        // TVBox spider 不带 ac,封面保持豆瓣直链
+        assertThat(spiderResult.getList()).singleElement().satisfies(movie ->
+                assertThat(movie.getVod_pic()).isEqualTo("https://img3.doubanio.com/view/photo/s_ratio_poster/public/p1.jpg"));
+        server.verify();
+    }
+
+    @Test
+    void listDoubanHotTvRegionUsesRecommendApiPerRegion() {
+        RestTemplate restTemplate = new RestTemplate();
+        MockRestServiceServer server = MockRestServiceServer.bindTo(restTemplate).build();
+        TelegramService service = createService(new AppProperties(), restTemplate, mock(TelegramChannelRepository.class));
+
+        server.expect(once(), request -> {
+                    assertThat(request.getURI().getPath()).endsWith("/tv/recommend");
+                    // tags=电视剧,日本
+                    assertThat(request.getURI().getQuery()).contains("tags=%E7%94%B5%E8%A7%86%E5%89%A7%2C%E6%97%A5%E6%9C%AC");
+                })
+                .andRespond(withSuccess("""
+                        {"total":500,"items":[{"id":"1","title":"日剧",
+                          "pic":{"normal":"https://img1.doubanio.com/p1.jpg"},"rating":{"count":10,"value":8.0}}]}
+                        """, MediaType.APPLICATION_JSON));
+        server.expect(once(), request -> {
+                    assertThat(request.getURI().getPath()).endsWith("/tv/recommend");
+                    // tags=电视剧,韩国 —— 不同地区各自请求,不落同一条缓存
+                    assertThat(request.getURI().getQuery()).contains("tags=%E7%94%B5%E8%A7%86%E5%89%A7%2C%E9%9F%A9%E5%9B%BD");
+                })
+                .andRespond(withSuccess("""
+                        {"total":500,"items":[{"id":"2","title":"韩剧",
+                          "pic":{"normal":"https://img2.doubanio.com/p2.jpg"},"rating":{"count":20,"value":7.0}}]}
+                        """, MediaType.APPLICATION_JSON));
+
+        var japan = service.listDouban("hot_tv", "web", null, null, null, "日本", 1, 20);
+        var korea = service.listDouban("hot_tv", "web", null, null, null, "韩国", 1, 20);
+
+        assertThat(japan.getList()).singleElement().satisfies(movie -> {
+            assertThat(movie.getVod_name()).isEqualTo("日剧");
+            assertThat(movie.getVod_pic()).isEqualTo("/images?url=https://img1.doubanio.com/p1.jpg");
+        });
+        assertThat(korea.getList()).singleElement().satisfies(movie ->
+                assertThat(movie.getVod_name()).isEqualTo("韩剧"));
         server.verify();
     }
 

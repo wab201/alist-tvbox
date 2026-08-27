@@ -69,6 +69,7 @@ import java.util.Base64;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.Iterator;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ExecutionException;
@@ -762,7 +763,8 @@ public class TelegramService {
     }
 
     private MovieList getDoubanList(String type, String ac, String sort, Integer year, String genre, String region, int page, int size) {
-        String key = ac + "-" + type + "-" + page;
+        String key = ac + "-" + type + "-" + page + "-" + StringUtils.defaultString(sort) + "-" + year
+                + "-" + StringUtils.defaultString(genre) + "-" + StringUtils.defaultString(region);
         MovieList result = douban.getIfPresent(key);
         if (result != null) {
             return result;
@@ -777,11 +779,11 @@ public class TelegramService {
         }
 
         if (type.startsWith("suggestion_")) {
-            return getDoubanItems(type, ac, page, size);
+            return getDoubanItems(type, ac, page, size, region);
         }
 
         if (type.startsWith("hot_")) {
-            return getDoubanItems(type, ac, page, size);
+            return getDoubanItems(type, ac, page, size, region);
         }
 
         result = new MovieList();
@@ -814,20 +816,12 @@ public class TelegramService {
     }
 
     private void fixCover(MovieDetail movie) {
-        try {
-            if (movie.getVod_pic() != null && !movie.getVod_pic().isEmpty()) {
-                String cover = ServletUriComponentsBuilder.fromCurrentRequest()
-                        .scheme(appProperties.isEnableHttps() && !Utils.isLocalAddress() ? "https" : "http") // nginx https
-                        .replacePath("/images")
-                        .replaceQuery("url=" + movie.getVod_pic())
-                        .build()
-                        .toUriString();
-                log.debug("cover url: {}", cover);
-                movie.setVod_pic(cover);
-            }
-        } catch (Exception e) {
-            // ignore
+        if (StringUtils.isEmpty(movie.getVod_pic())) {
+            return;
         }
+        // 相对地址交给浏览器按页面源补全:fromCurrentRequest 在 https 反代未开 enable_https 时会拼出
+        // http:// 封面被按混合内容拦截(TMDB 直链不受影响),换域名/端口也不会再拼错
+        movie.setVod_pic("/images?url=" + movie.getVod_pic());
     }
 
     private MovieList getLocalMovieList(String ac, String sort, Integer year, String genre, String region, int page, int size) {
@@ -934,8 +928,8 @@ public class TelegramService {
         return result;
     }
 
-    private MovieList getDoubanItems(String type, String ac, int page, int size) {
-        String key = ac + "-" + type + "-" + page;
+    private MovieList getDoubanItems(String type, String ac, int page, int size, String region) {
+        String key = ac + "-" + type + "-" + page + "-" + StringUtils.defaultString(region);
         int start = (page - 1) * size;
         String url = "https://m.douban.com/rexxar/api/v2/subject/recent_hot/movie?limit=" + size + "&start=" + start;
         if (type.equals("hot_tv")) {
@@ -944,6 +938,12 @@ public class TelegramService {
             url = "https://m.douban.com/rexxar/api/v2/movie/suggestion?start=" + start + "&count=" + size + "&new_struct=1&with_review=1&for_mobile=1";
         } else if (type.equals("suggestion_tv")) {
             url = "https://m.douban.com/rexxar/api/v2/tv/suggestion?start=" + start + "&count=" + size + "&new_struct=1&with_review=1&for_mobile=1";
+        }
+        // 近期热播接口不支持地区参数;带地区改走 discover 式 recommend(tags 语法,单国家粒度)
+        if (StringUtils.isNotBlank(region) && (type.equals("hot_tv") || type.equals("hot_movie"))) {
+            String tags = URLEncoder.encode((type.equals("hot_tv") ? "电视剧" : "电影") + "," + region, StandardCharsets.UTF_8);
+            url = "https://m.douban.com/rexxar/api/v2/" + (type.equals("hot_tv") ? "tv" : "movie")
+                    + "/recommend?refresh=0&start=" + start + "&limit=" + size + "&uncollect=false&tags=" + tags;
         }
 
         MovieList result = new MovieList();
@@ -1161,8 +1161,52 @@ public class TelegramService {
             results = getResult(futures);
         }
 
+        List<Message> list = filterAndSort(results);
+        log.info("Search {} get {} results from {} channels.", keyword, list.size(), searchedChannelCount);
+        return list;
+    }
+
+    /**
+     * 聚合搜索:盘搜 / TG-Search / 电报网页**同时**跑,按 link 去重合并。
+     * <p>
+     * 与 {@link #search(String, int, boolean, boolean)} 的回退链相反 —— 那条链"任一来源结果够用即停",
+     * 于是配了盘搜的部署里 TG-Search 与电报网页永远不会被调用,而电报网页恰恰是唯一不依赖外部实例的
+     * 内置来源。追更场景需要的是**最大召回**(资源不够时重复搜同一个源没有意义,结果不会变),
+     * 所以三路全开。任一路失败只记日志,不影响其它路。
+     */
+    public List<Message> searchAggregated(String keyword, int size, boolean cached) {
+        List<TelegramChannel> channels = list().stream()
+                .filter(TelegramChannel::isValid).filter(TelegramChannel::isEnabled).toList();
+        List<Future<List<Message>>> futures = new ArrayList<>();
+
+        if (StringUtils.isNotBlank(appProperties.getPanSouUrl())) {
+            List<String> ids = channels.stream().map(TelegramChannel::getUsername).toList();
+            futures.add(executorService.submit(() -> remoteSearchService.search(keyword, ids)));
+        }
+        if (StringUtils.isNotBlank(appProperties.getTgSearch())) {
+            futures.add(executorService.submit(() -> searchTgSearchApi(keyword, null, 1, size).messages()));
+        }
+        for (var channel : channels.stream().filter(TelegramChannel::isWebAccess).toList()) {
+            String name = channel.getUsername();
+            futures.add(executorService.submit(
+                    () -> cached ? searchCache.get(name + "-false") : searchFromChannel(name, keyword, false, size)));
+        }
+
+        Map<String, Message> merged = new LinkedHashMap<>();
+        for (Message message : getResult(futures)) {
+            if (StringUtils.isNotBlank(message.getLink())) {
+                merged.putIfAbsent(message.getLink(), message);
+            }
+        }
+        List<Message> list = filterAndSort(merged.values().stream().toList());
+        log.info("Aggregated search {} get {} results ({} sources).", keyword, list.size(), futures.size());
+        return list;
+    }
+
+    /** 内容过滤(电子书/软件等非影视)与排序,回退链与聚合模式共用。 */
+    private List<Message> filterAndSort(List<Message> results) {
         List<String> tgDrivers = appProperties.getTgDrivers();
-        List<Message> list = results.stream()
+        return results.stream()
                 .filter(e -> tgDrivers.isEmpty() || tgDrivers.contains(e.getType()))
                 .filter(e -> !e.getContent().toLowerCase().contains("pdf"))
                 .filter(e -> !e.getContent().toLowerCase().contains("epub"))
@@ -1176,12 +1220,9 @@ public class TelegramService {
                 .sorted(comparator())
                 .distinct()
                 .toList();
-        log.info("Search {} get {} results from {} channels.", keyword, list.size(), searchedChannelCount);
-        return list;
     }
 
-    private Comparator<Message> comparator() {
-        Comparator<Message> type = Comparator.comparing(a -> appProperties.getTgDriverOrder().indexOf(a.getType()));
+    private Comparator<Message> comparator() {        Comparator<Message> type = Comparator.comparing(a -> appProperties.getTgDriverOrder().indexOf(a.getType()));
         return switch (appProperties.getTgSortField()) {
             case "type" -> type.thenComparing(Comparator.comparing(Message::getTime).reversed());
             case "name" -> Comparator.comparing(Message::getName);
@@ -1480,8 +1521,11 @@ public class TelegramService {
 
         String html = getHtml(url);
 
+        return parseWebMessages(Jsoup.parse(html), username);
+    }
+
+    List<Message> parseWebMessages(Document doc, String username) {
         List<Message> list = new ArrayList<>();
-        Document doc = Jsoup.parse(html);
         Elements elements = doc.select("div.tgme_container div.tgme_widget_message_wrap");
         for (Element element : elements) {
             Element photo = element.selectFirst("a.tgme_widget_message_photo_wrap");
@@ -1490,7 +1534,14 @@ public class TelegramService {
                 String style = photo.attr("style");
                 cover = style.replaceAll(".*background-image:url\\('(.*?)'\\).*", "$1");
             }
-            String id = element.selectFirst(".tgme_widget_message").attr("data-post").split("/")[1];
+            Element message = element.selectFirst(".tgme_widget_message");
+            String post = message != null ? message.attr("data-post") : "";
+            String[] parts = post.split("/");
+            if (parts.length < 2 || !parts[1].matches("\\d+")) {
+                log.debug("Skip message with invalid data-post '{}'", post);
+                continue;
+            }
+            String id = parts[1];
             Element elTime = element.selectFirst("time");
             String time = elTime != null ? elTime.attr("datetime") : null;
             list.add(new Message(Integer.parseInt(id), username, getTextWithNewlines(element.select(".tgme_widget_message_text").first()), time, cover));
