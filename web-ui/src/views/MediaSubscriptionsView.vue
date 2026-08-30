@@ -81,7 +81,7 @@
                 </el-image>
                 <div>
                   <div>
-                    <a class="name-link" @click="showDetail(scope.row)">{{ scope.row.name }}</a>
+                    <a class="name-link" @click="showDetail(scope.row)">{{ displayName(scope.row) }}</a>
                   </div>
                   <div class="sub-text">
                     {{ scope.row.activeResourceTitle || scope.row.keyword }}
@@ -214,6 +214,11 @@
         <el-form-item label="检查周期(时)">
           <el-input-number v-model="form.checkIntervalHours" :min="1" :max="168"/>
           <span class="sub-text" style="margin-left:8px">绑定元数据后按播出日程自动调度</span>
+        </el-form-item>
+        <el-form-item label="播出时刻">
+          <el-time-select v-model="form.customAirClock" start="00:00" end="23:45" step="00:15"
+                          placeholder="自动(官方日程/平台桥接,默认 20:00)" clearable style="width: 160px"/>
+          <span class="sub-text" style="margin-left:8px">官方只给日期没给时刻的剧按 20:00 兜底;确认实际排播后手动校正,清空恢复自动</span>
         </el-form-item>
         <el-form-item label="主网盘(覆盖)">
           <el-select v-model="form.mainDrives" multiple clearable :placeholder="`跟随全局${globalMainDrivesLabel}`">
@@ -495,44 +500,49 @@
       </template>
     </el-dialog>
 
-    <el-dialog v-model="notifyVisible" title="追剧设置" width="600">
+    <el-dialog v-model="notifyVisible" title="追剧设置" width="50%">
       <el-form label-width="140">
         <el-tabs v-model="notifyTab">
           <el-tab-pane label="通用" name="general">
-        <el-form-item label="全局主网盘">
-          <el-select v-model="notifyForm.mainDrives" multiple placeholder="选 1-2 个,按优先级排序" style="width: 100%">
-            <el-option v-for="drive in driveOptions" :key="drive.value" :label="driveLabel(drive)" :value="drive.value"/>
-          </el-select>
-          <span class="sub-text">巡检保证主网盘剧集完整并固定播放线路;订阅可单独覆盖;分享挂载免登录,标注"已加账号"的盘更稳</span>
-        </el-form-item>
-        <el-form-item label="扩展网盘">
-          <el-select v-model="notifyForm.extendedDrives" multiple clearable placeholder="留空时候选仅收主网盘" style="width: 100%">
-            <el-option v-for="drive in driveOptions" :key="drive.value" :label="driveLabel(drive)" :value="drive.value"/>
-          </el-select>
-          <span class="sub-text">主网盘以外允许进候选池的网盘;不配置则候选/补缺/分盘线路只有主网盘的源(主网盘也未配置时才不限盘)</span>
-        </el-form-item>
-        <el-form-item label="Bot Token">
-          <el-input v-model="notifyForm.botToken" placeholder="123456:ABC-...,留空关闭通知"/>
-        </el-form-item>
-        <el-form-item label="Chat ID">
-          <el-input v-model="notifyForm.chatId" placeholder="与 bot 对话后获取"/>
-        </el-form-item>
-        <el-form-item label="完结归档(天)">
-          <el-input-number v-model="notifyForm.archiveDays" :min="0" :max="3650"/>
-          <span class="sub-text" style="margin-left:8px">完结 N 天后自动释放转存文件,0=关闭</span>
-        </el-form-item>
-        <el-form-item label="豆瓣 Cookie">
-          <el-input v-model="notifyForm.doubanCookie" type="textarea" :rows="2"
-                    placeholder="登录 movie.douban.com 后复制 Cookie,留空关闭;用于解析详情页又名/单集播出时间(限速抓取)"/>
-          <span class="sub-text">豆瓣条目自动补"又名"提高搜索匹配,并经 IMDb 桥接 TMDB 获取单集播出日程</span>
-        </el-form-item>
-        <el-form-item label="VIP 账号">
-          <el-select v-model="notifyForm.vipAccounts" multiple placeholder="勾选 SVIP/会员账号,资源评分加权" style="width: 100%">
-            <el-option v-for="account in accounts" :key="account.id" :label="account.name + '(' + account.type + ')'" :value="account.id"/>
-          </el-select>
-          <span class="sub-text">对应网盘的候选资源打分 +15(已配置账号本身 +8),如夸克 SVIP/百度 SVIP/115 会员</span>
-        </el-form-item>
-        <span class="sub-text">玩偶聚合搜索源默认开启无需配置(wanou-enabled 可关);盘链/观影/蜗牛在各自标签页配置,无凭证的源自动关闭</span>
+            <el-form-item v-if="store.admin" label="全局主网盘">
+              <el-select v-model="notifyForm.mainDrives" multiple placeholder="选 1-2 个,按优先级排序" style="width: 100%">
+                <el-option v-for="drive in driveOptions" :key="drive.value" :label="driveLabel(drive)" :value="drive.value"/>
+              </el-select>
+              <span class="sub-text">巡检保证主网盘剧集完整并固定播放线路;订阅可单独覆盖;分享挂载免登录,标注"已加账号"的盘更稳</span>
+            </el-form-item>
+            <el-form-item v-if="store.admin" label="扩展网盘">
+              <el-select v-model="notifyForm.extendedDrives" multiple clearable placeholder="留空时候选仅收主网盘" style="width: 100%">
+                <el-option v-for="drive in driveOptions" :key="drive.value" :label="driveLabel(drive)" :value="drive.value"/>
+              </el-select>
+              <span class="sub-text">主网盘以外允许进候选池的网盘;不配置则候选/补缺/分盘线路只有主网盘的源(主网盘也未配置时才不限盘)</span>
+            </el-form-item>
+            <el-form-item label="Bot Token">
+              <el-input v-model="notifyForm.botToken" placeholder="123456:ABC-...,留空关闭通知"/>
+            </el-form-item>
+            <el-form-item label="Chat ID">
+              <el-input v-model="notifyForm.chatId" placeholder="与 bot 对话后获取"/>
+              <span v-if="!store.admin" class="sub-text">个人 TG 通知渠道:留空时沿用管理员配置的全局渠道</span>
+            </el-form-item>
+            <el-form-item v-if="store.admin" label="Bot 交互">
+              <el-switch v-model="notifyForm.botEnabled"/>
+              <span class="sub-text" style="margin-left:8px">允许在 Telegram 里与 Bot 对话(查订阅/搜索/追剧/退订);只需收通知不需要对话时可关闭</span>
+            </el-form-item>
+            <el-form-item v-if="store.admin" label="完结归档(天)">
+              <el-input-number v-model="notifyForm.archiveDays" :min="0" :max="3650"/>
+              <span class="sub-text" style="margin-left:8px">完结 N 天后自动释放转存文件,0=关闭</span>
+            </el-form-item>
+            <el-form-item v-if="store.admin" label="豆瓣 Cookie">
+              <el-input v-model="notifyForm.doubanCookie" type="textarea" :rows="2"
+                        placeholder="登录 movie.douban.com 后复制 Cookie,留空关闭;用于解析详情页又名/单集播出时间(限速抓取)"/>
+              <span class="sub-text">豆瓣条目自动补"又名"提高搜索匹配,并经 IMDb 桥接 TMDB 获取单集播出日程</span>
+            </el-form-item>
+            <el-form-item v-if="store.admin" label="VIP 账号">
+              <el-select v-model="notifyForm.vipAccounts" multiple placeholder="勾选 SVIP/会员账号,资源评分加权" style="width: 100%">
+                <el-option v-for="account in accounts" :key="account.id" :label="account.name + '(' + account.type + ')'" :value="account.id"/>
+              </el-select>
+              <span class="sub-text">对应网盘的候选资源打分 +15(已配置账号本身 +8),如夸克 SVIP/百度 SVIP/115 会员</span>
+            </el-form-item>
+            <span v-if="store.admin" class="sub-text">玩偶聚合搜索源默认开启无需配置(wanou-enabled 可关);盘链/观影/蜗牛在各自标签页配置,无凭证的源自动关闭</span>
           </el-tab-pane>
           <el-tab-pane label="资源筛选" name="poolFilter">
             <el-form-item label="清晰度门槛">
@@ -564,7 +574,22 @@
             </el-form-item>
             <span class="sub-text">对所有订阅生效(下轮巡检起):入池、存量候选换源、单集文件筛选统一收紧;订阅级单集体积优先、排除词两边并集;已挂载主源不主动更换,自然失效后按新规则换源</span>
           </el-tab-pane>
-          <el-tab-pane label="盘链" name="panlian">
+          <el-tab-pane v-if="store.admin" label="TMDB" name="tmdb">
+            <el-form-item label="API Key / Token">
+              <el-input v-model="notifyForm.tmdbApiKey" type="password" show-password
+                        placeholder="v3 API key(32位)或 v4 read access token(eyJ... 开头);留空用内置公共 key"/>
+              <span class="sub-text">两种凭证自动识别:api key 拼请求 URL,read access token 走 Bearer 请求头(不落 URL 与代理访问日志);与 系统设置→TMDB API Key 为同一配置,保存即生效;
+                <a href="https://www.themoviedb.org/settings/api" target="_blank" rel="noopener">到官网获取 →</a>
+              </span>
+            </el-form-item>
+            <el-form-item label="TMDB 线路">
+              <el-select v-model="notifyForm.tmdbApiHost" style="width: 100%">
+                <el-option v-for="opt in tmdbApiHostOptions" :key="opt.value" :label="opt.label" :value="opt.value"/>
+              </el-select>
+              <span class="sub-text">国内直连官方不通时切换反代;Worker 轮询池分摊各 worker 每日限额,Worker 型 API 与封面同域,NAStool 型自动分开配置图床(系统设置页同一配置)</span>
+            </el-form-item>
+          </el-tab-pane>
+          <el-tab-pane v-if="store.admin" label="盘链" name="panlian">
         <el-form-item label="站点">
           <el-input v-model="notifyForm.panlianHost" placeholder="留空用内置地址;自定义镜像站填 https://..."/>
         </el-form-item>
@@ -579,7 +604,7 @@
                     placeholder="可代替账号密码:浏览器登录后复制 Cookie;无凭证时该搜索源自动关闭"/>
         </el-form-item>
           </el-tab-pane>
-          <el-tab-pane label="观影" name="guanying">
+          <el-tab-pane v-if="store.admin" label="观影" name="guanying">
         <el-form-item label="站点">
           <el-input v-model="notifyForm.guanyingHost" placeholder="留空用内置 8 个镜像;多个地址逗号/竖线/换行分隔"/>
         </el-form-item>
@@ -594,7 +619,7 @@
                     placeholder="可代替账号密码:浏览器登录后复制 Cookie;无凭证时该搜索源自动关闭"/>
         </el-form-item>
           </el-tab-pane>
-          <el-tab-pane label="蜗牛" name="woniu">
+          <el-tab-pane v-if="store.admin" label="蜗牛" name="woniu">
         <el-form-item label="站点">
           <el-input v-model="notifyForm.woniuHost" placeholder="留空自动测速双线路(wn4k/zmi);自定义填 https://..."/>
         </el-form-item>
@@ -608,6 +633,83 @@
           <el-input v-model="notifyForm.woniuCookie" type="textarea" :rows="2"
                     placeholder="须含 user_check(登录后复制);未登录网盘链接会被打码,无凭证时该搜索源自动关闭"/>
         </el-form-item>
+          </el-tab-pane>
+          <el-tab-pane v-if="store.admin" label="TG-Search" name="tgsearch">
+            <el-form-item label="TG-Search地址">
+              <el-input v-model="notifyForm.tgSearch" placeholder="http://IP:9900"/>
+              <span class="sub-text"><a href="https://github.com/power721/tg-search" target="_blank">部署 TG-Search</a>;与播放设置共用,留空关闭</span>
+            </el-form-item>
+            <el-form-item label="TG-Search API Key">
+              <el-input v-model="notifyForm.tgSearchApiKey" type="password" show-password/>
+            </el-form-item>
+            <span class="sub-text">追剧巡检的链接有效性检测(候选换源/挂载前探测)按 盘检 tab 的优先级走对应后端</span>
+          </el-tab-pane>
+          <el-tab-pane v-if="store.admin" label="盘搜" name="pansou">
+            <el-form-item label="PanSou地址">
+              <el-input v-model="notifyForm.panSouUrl" placeholder="http://IP:8888"/>
+              <span class="sub-text">与播放设置-盘搜配置共用;配置后追剧搜索源启用「鱼佬盘搜/盘搜 • 分组」</span>
+            </el-form-item>
+            <el-form-item label="PanSou用户名" v-if="notifyForm.panSouUrl && panSouAuthEnabled">
+              <el-input v-model="notifyForm.panSouUsername"/>
+            </el-form-item>
+            <el-form-item label="PanSou密码" v-if="notifyForm.panSouUrl && panSouAuthEnabled">
+              <el-input v-model="notifyForm.panSouPassword" type="password" show-password/>
+            </el-form-item>
+            <el-form-item label="PanSou数据源" v-if="notifyForm.panSouUrl">
+              <el-radio-group v-model="notifyForm.panSouSource" class="ml-4">
+                <el-radio size="large" value="all">全部</el-radio>
+                <el-radio size="large" value="tg">电报</el-radio>
+                <el-radio size="large" value="plugin">插件</el-radio>
+              </el-radio-group>
+            </el-form-item>
+            <el-form-item label="PanSou频道列表" v-if="notifyForm.panSouUrl">
+              <el-radio-group v-model="notifyForm.panSouChannels" class="ml-4">
+                <el-radio size="large" value="custom">自定义</el-radio>
+                <el-radio size="large" value="project">项目内置</el-radio>
+                <el-radio size="large" value="pansou">盘搜内置</el-radio>
+              </el-radio-group>
+              <span class="sub-text">自定义=频道管理里勾选的频道,项目内置=本站内置频道清单,盘搜内置=PanSou 自带频道</span>
+            </el-form-item>
+            <el-form-item label="并发数" v-if="notifyForm.panSouUrl">
+              <el-input-number v-model="notifyForm.panSouConc" :min="0" placeholder="自动"/>
+              <span class="sub-text" style="margin-left:8px">0=上游自动并发(频道数+插件数+10)</span>
+            </el-form-item>
+            <el-form-item label="强制刷新" v-if="notifyForm.panSouUrl">
+              <el-switch v-model="notifyForm.panSouRefresh"/>
+              <span class="sub-text" style="margin-left:8px">跳过 PanSou 缓存,获取最新数据</span>
+            </el-form-item>
+            <el-form-item label="包含词" v-if="notifyForm.panSouUrl">
+              <el-input v-model="notifyForm.panSouFilterInclude" placeholder="多个用逗号分隔,如 1080,4K"/>
+            </el-form-item>
+            <el-form-item label="排除词" v-if="notifyForm.panSouUrl">
+              <el-input v-model="notifyForm.panSouFilterExclude" placeholder="多个用逗号分隔,如 枪版,广告"/>
+            </el-form-item>
+            <span class="sub-text">地址留空=关闭盘搜源;是否需要用户名密码登录由 PanSou /api/health 返回的鉴权状态决定;数据源/频道列表/并发/刷新/包含词/排除词与播放设置完全同步</span>
+          </el-tab-pane>
+          <el-tab-pane v-if="store.admin" label="盘检" name="pancheck">
+            <el-form-item label="盘检地址">
+              <el-input v-model="notifyForm.panCheckUrl" placeholder="http://IP:6080"/>
+              <span class="sub-text"><a href="https://github.com/Lampon/PanCheck" target="_blank">部署 PanCheck</a>;独立网盘链接检测后端,配置后优先使用;优先级:盘检地址 &gt; TG-Search &gt; PanSou,留空则回退</span>
+            </el-form-item>
+            <el-form-item label="盘检超时(ms)">
+              <el-input-number v-model="notifyForm.panCheckTimeoutMs" :min="0" :step="1000" placeholder="默认5000"/>
+              <span class="sub-text" style="margin-left:8px">仅在走 TG-Search 盘检时作为 timeout_ms 生效,0=上游默认(PanCheck/PanSou 无此参数)</span>
+            </el-form-item>
+            <el-form-item label="链接检测">
+              <el-switch v-model="notifyForm.panSouLinkCheckEnabled"/>
+              <span class="sub-text" style="margin-left:8px">自动检查盘搜搜索结果的有效性</span>
+            </el-form-item>
+            <el-form-item label="检测网盘类型">
+              <el-checkbox-group v-model="notifyForm.panSouLinkCheckTypes">
+                <el-checkbox v-for="t in panSouLinkCheckTypeOptions" :key="t.value" :label="t.label" :value="t.value"/>
+              </el-checkbox-group>
+              <span class="sub-text">留空=检测全部9种</span>
+            </el-form-item>
+            <el-form-item label="检测数量上限">
+              <el-input-number v-model="notifyForm.panSouLinkCheckMaxCount" :min="0" :max="1000"/>
+              <span class="sub-text" style="margin-left:8px">仅当网盘结果数量小于等于该值时检查,磁力和ED2K不计算数量</span>
+            </el-form-item>
+            <span class="sub-text">追剧巡检的链接有效性检测(候选换源/挂载前探测)走这里配置的后端</span>
           </el-tab-pane>
         </el-tabs>
       </el-form>
@@ -656,6 +758,7 @@ import {computed, onBeforeUnmount, onMounted, ref, watch} from 'vue'
 import {useRouter} from 'vue-router'
 import axios from 'axios'
 import {ElMessage, ElMessageBox} from 'element-plus'
+import {store} from '@/services/store'
 
 /** 组件卸载统一清理延时刷新(检查/转存后的自动 reload):离开页面后不再触发孤儿请求 */
 const pendingTimers = new Set<number>()
@@ -701,6 +804,7 @@ interface SubscriptionDto {
   missingEpisodes: number[]
   stallCount: number
   checkIntervalHours: number | null
+  customAirClock: string | null
   nextCheckTime: number | null
   lastCheckTime: number | null
   resourceCount: number
@@ -930,11 +1034,23 @@ const importText = ref('')
 const importing = ref(false)
 const notifyVisible = ref(false)
 const notifyTab = ref('general')
+// PanSou 是否开启鉴权:由 /api/pansou(健康检查缓存)返回的 auth_enabled 决定,决定是否展示用户名/密码
+const panSouAuthEnabled = ref(false)
+const loadPanSouAuth = () => {
+  axios.get('/api/pansou').then(({data}) => {
+    panSouAuthEnabled.value = data.auth_enabled === true
+  }).catch(() => {
+    panSouAuthEnabled.value = false
+  })
+}
 const notifyForm = ref({
   botToken: '',
   chatId: '',
+  botEnabled: true,
   doubanCookie: '',
   archiveDays: 0,
+  tmdbApiKey: '',
+  tmdbApiHost: '',
   vipAccounts: [] as number[],
   mainDrives: [] as number[],
   extendedDrives: [] as number[],
@@ -955,7 +1071,42 @@ const notifyForm = ref({
   woniuUsername: '',
   woniuPassword: '',
   woniuCookie: '',
+  panSouUrl: '',
+  panSouUsername: '',
+  panSouPassword: '',
+  panSouSource: 'all',
+  panSouChannels: 'custom',
+  panSouConc: null as number | null,
+  panSouRefresh: false,
+  panSouFilterInclude: '',
+  panSouFilterExclude: '',
+  tgSearch: '',
+  tgSearchApiKey: '',
+  panCheckUrl: '',
+  panCheckTimeoutMs: null as number | null,
+  panSouLinkCheckEnabled: false,
+  panSouLinkCheckTypes: [] as string[],
+  panSouLinkCheckMaxCount: 300,
 })
+const panSouLinkCheckTypeOptions = [
+  {label: '百度网盘', value: 'baidu'},
+  {label: '阿里云盘', value: 'aliyun'},
+  {label: '夸克网盘', value: 'quark'},
+  {label: '天翼云盘', value: 'tianyi'},
+  {label: 'UC网盘', value: 'uc'},
+  {label: '移动云盘', value: 'mobile'},
+  {label: '115网盘', value: '115'},
+  {label: '迅雷网盘', value: 'xunlei'},
+  {label: '123网盘', value: '123'},
+]
+const tmdbApiHostOptions = [
+  {label: '官方 API - https://api.themoviedb.org', value: ''},
+  {label: 'Worker 轮询池 - 3 个全用,round robin 分摊每日限额', value: 'https://tmdb.8866033.xyz,https://tmdb.swust-oj.workers.dev,https://tmdb.8866033.workers.dev'},
+  {label: 'Worker - https://tmdb.8866033.xyz', value: 'https://tmdb.8866033.xyz'},
+  {label: 'Worker - https://tmdb.swust-oj.workers.dev', value: 'https://tmdb.swust-oj.workers.dev'},
+  {label: 'Worker - https://tmdb.8866033.workers.dev', value: 'https://tmdb.8866033.workers.dev'},
+  {label: 'NAStool - https://tmdb.nastool.org (API) + img.nastool.org (图床)', value: 'https://tmdb.nastool.org'},
+]
 const navigationVisible = ref(false)
 const navCategories = ref<{ type_id: string, type_name: string }[]>([])
 const navAllFilters = ref<Record<string, any[]>>({})
@@ -1128,6 +1279,7 @@ const handleAdd = () => {
     accountIds: [] as string[],
     crossDrive: false,
     checkIntervalHours: 6,
+    customAirClock: null,
     mainDrives: [] as number[],
     driveTypes: [],
     qualities: [],
@@ -1160,6 +1312,7 @@ const handleEdit = (row: SubscriptionDto) => {
     accountIds: row.accountIds?.length ? row.accountIds : (row.accountId ? ['pan:' + row.accountId] : []),
     crossDrive: !!row.crossDrive,
     checkIntervalHours: row.checkIntervalHours ?? 6,
+    customAirClock: row.customAirClock ?? null,
     mainDrives: row.mainDrives || [],
     driveTypes: row.filter?.driveTypes || [],
     qualities: row.filter?.qualities || [],
@@ -1259,6 +1412,7 @@ const buildBody = () => ({
   accountIds: form.value.accountIds,
   crossDrive: form.value.crossDrive,
   checkIntervalHours: form.value.checkIntervalHours,
+  customAirClock: form.value.customAirClock || '',
   mainDrives: [...new Set(form.value.mainDrives || [])].slice(0, 2),
   filter: {
     driveTypes: form.value.driveTypes,
@@ -1590,13 +1744,48 @@ const parsePoolFilter = (raw: string) => {
   }
 }
 
+/** 普通用户加载到的资源筛选快照(同款序列化):保存时未改动则跳过,避免把默认空配置存成用户级覆盖(盖掉全局门禁) */
+const userPoolRaw = ref('')
+const buildPoolFilterValue = () => JSON.stringify({
+  minQuality: notifyForm.value.poolMinQuality || '',
+  includeKeywords: notifyForm.value.poolIncludeKeywords.map((k: string) => k.trim()).filter(Boolean),
+  excludeKeywords: notifyForm.value.poolExcludeKeywords.map((k: string) => k.trim()).filter(Boolean),
+  minEpisodeSizeMb: notifyForm.value.poolMinEpisodeSizeMb || 0,
+  maxEpisodeSizeMb: notifyForm.value.poolMaxEpisodeSizeMb || 0,
+})
 const openNotify = () => {
   notifyTab.value = 'general'
+  if (!store.admin) {
+    // 普通用户:个人 TG 渠道 + 资源筛选偏好走用户级设置(读取回退全局值),其余全局项不展示
+    Promise.all([
+      axios.get('/api/user-settings/msub_telegram_bot_token'),
+      axios.get('/api/user-settings/msub_telegram_chat_id'),
+      axios.get('/api/user-settings/msub_pool_filter'),
+    ]).then(([token, chat, pool]) => {
+      notifyForm.value.botToken = token.data?.value || ''
+      notifyForm.value.chatId = chat.data?.value || ''
+      const poolFilter = parsePoolFilter(pool.data?.value || '')
+      notifyForm.value.poolMinQuality = poolFilter.minQuality
+      notifyForm.value.poolIncludeKeywords = poolFilter.includeKeywords
+      notifyForm.value.poolExcludeKeywords = poolFilter.excludeKeywords
+      notifyForm.value.poolMinEpisodeSizeMb = poolFilter.minEpisodeSizeMb
+      notifyForm.value.poolMaxEpisodeSizeMb = poolFilter.maxEpisodeSizeMb
+      userPoolRaw.value = buildPoolFilterValue()
+      notifyLoaded.value = true
+      notifyVisible.value = true
+    }).catch(() => {
+      ElMessage.error('设置加载失败,未打开对话框,请重试')
+    })
+    return
+  }
   axios.get('/api/settings').then(response => {
     const settings = response.data || {}
     notifyForm.value.botToken = settings['msub_telegram_bot_token'] || ''
     notifyForm.value.chatId = settings['msub_telegram_chat_id'] || ''
+    notifyForm.value.botEnabled = settings['msub_telegram_bot_enabled'] !== 'false'
     notifyForm.value.doubanCookie = settings['douban_cookie'] || ''
+    notifyForm.value.tmdbApiKey = settings['tmdb_api_key'] || ''
+    notifyForm.value.tmdbApiHost = settings['tmdb_api_host'] || ''
     notifyForm.value.archiveDays = parseInt(settings['msub_archive_days'] || '0') || 0
     notifyForm.value.vipAccounts = (settings['msub_vip_accounts'] || '')
         .split(',').map((v: string) => parseInt(v.trim())).filter((v: number) => v > 0)
@@ -1622,10 +1811,30 @@ const openNotify = () => {
     notifyForm.value.woniuUsername = settings['woniu_username'] || ''
     notifyForm.value.woniuPassword = settings['woniu_password'] || ''
     notifyForm.value.woniuCookie = settings['woniu_cookie'] || ''
+    notifyForm.value.panSouUrl = settings['pan_sou_url'] || ''
+    notifyForm.value.panSouUsername = settings['pan_sou_username'] || ''
+    notifyForm.value.panSouPassword = settings['pan_sou_password'] || ''
+    notifyForm.value.panSouSource = settings['pan_sou_source'] || 'all'
+    notifyForm.value.panSouChannels = settings['pan_sou_channels'] || 'custom'
+    notifyForm.value.panSouConc = settings['pan_sou_conc'] ? +settings['pan_sou_conc'] : null
+    notifyForm.value.panSouRefresh = settings['pan_sou_refresh'] === 'true'
+    notifyForm.value.panSouFilterInclude = settings['pan_sou_filter_include'] || ''
+    notifyForm.value.panSouFilterExclude = settings['pan_sou_filter_exclude'] || ''
+    notifyForm.value.tgSearch = settings['tg_search'] || ''
+    notifyForm.value.tgSearchApiKey = settings['tg_search_api_key'] || ''
+    notifyForm.value.panCheckUrl = settings['pan_check_url'] || ''
+    notifyForm.value.panCheckTimeoutMs = settings['pan_check_timeout_ms'] ? +settings['pan_check_timeout_ms'] : null
+    notifyForm.value.panSouLinkCheckEnabled = settings['pan_sou_link_check_enabled'] === 'true'
+    notifyForm.value.panSouLinkCheckTypes = (settings['pan_sou_link_check_types'] || '')
+        .split(',').map((v: string) => v.trim()).filter(Boolean)
+    notifyForm.value.panSouLinkCheckMaxCount = parseInt(settings['pan_sou_link_check_max_count'] || '300') || 300
+    if (notifyForm.value.panSouUrl) {
+      loadPanSouAuth()
+    }
     notifyLoaded.value = true
     notifyVisible.value = true
   }).catch(() => {
-    // 加载失败绝不能打开空表单:保存会把 20 项配置(含 botToken/豆瓣 cookie/搜索源凭证/资源筛选)整体覆写为空
+      // 加载失败绝不能打开空表单:保存会把 30 余项配置(含 botToken/豆瓣 cookie/搜索源凭证/盘搜/TG-Search/资源筛选)整体覆写为空
     ElMessage.error('设置加载失败,未打开对话框,请重试')
   })
 }
@@ -1635,10 +1844,20 @@ const saveNotify = () => {
     ElMessage.warning('设置项尚未加载成功,暂不能保存(防止覆盖为空)')
     return
   }
-  const saves = [
+  const poolFilterValue = buildPoolFilterValue()
+  const saves = store.admin ? [
     axios.post('/api/settings', {name: 'msub_telegram_bot_token', value: notifyForm.value.botToken}),
     axios.post('/api/settings', {name: 'msub_telegram_chat_id', value: notifyForm.value.chatId}),
+    axios.post('/api/settings', {name: 'msub_telegram_bot_enabled', value: String(notifyForm.value.botEnabled)}),
     axios.post('/api/settings', {name: 'douban_cookie', value: notifyForm.value.doubanCookie}),
+    axios.post('/api/settings', {name: 'tmdb_api_key', value: notifyForm.value.tmdbApiKey}),
+    axios.post('/api/settings', {name: 'tmdb_api_host', value: notifyForm.value.tmdbApiHost}),
+    // 图床与 API 分线路的预设(NAStool)落 tmdb_image_host;切回官方时一并清掉;Worker 单键走后端回落跟随
+    ...(notifyForm.value.tmdbApiHost === 'https://tmdb.nastool.org'
+        ? [axios.post('/api/settings', {name: 'tmdb_image_host', value: 'https://img.nastool.org'})]
+        : notifyForm.value.tmdbApiHost === ''
+            ? [axios.post('/api/settings', {name: 'tmdb_image_host', value: ''})]
+            : []),
     axios.post('/api/settings', {name: 'msub_archive_days', value: String(notifyForm.value.archiveDays)}),
     axios.post('/api/settings', {name: 'msub_vip_accounts', value: notifyForm.value.vipAccounts.join(',')}),
     axios.post('/api/settings', {
@@ -1651,13 +1870,7 @@ const saveNotify = () => {
     }),
     axios.post('/api/settings', {
       name: 'msub_pool_filter',
-      value: JSON.stringify({
-        minQuality: notifyForm.value.poolMinQuality || '',
-        includeKeywords: notifyForm.value.poolIncludeKeywords.map((k: string) => k.trim()).filter(Boolean),
-        excludeKeywords: notifyForm.value.poolExcludeKeywords.map((k: string) => k.trim()).filter(Boolean),
-        minEpisodeSizeMb: notifyForm.value.poolMinEpisodeSizeMb || 0,
-        maxEpisodeSizeMb: notifyForm.value.poolMaxEpisodeSizeMb || 0,
-      }),
+      value: poolFilterValue,
     }),
     axios.post('/api/settings', {name: 'panlian_host', value: notifyForm.value.panlianHost.trim()}),
     axios.post('/api/settings', {name: 'panlian_username', value: notifyForm.value.panlianUsername.trim()}),
@@ -1671,7 +1884,33 @@ const saveNotify = () => {
     axios.post('/api/settings', {name: 'woniu_username', value: notifyForm.value.woniuUsername.trim()}),
     axios.post('/api/settings', {name: 'woniu_password', value: notifyForm.value.woniuPassword}),
     axios.post('/api/settings', {name: 'woniu_cookie', value: notifyForm.value.woniuCookie.trim()}),
-  ]
+    axios.post('/api/settings', {name: 'pan_sou_url', value: notifyForm.value.panSouUrl.trim()}),
+    axios.post('/api/settings', {name: 'pan_sou_username', value: notifyForm.value.panSouUsername.trim()}),
+    axios.post('/api/settings', {name: 'pan_sou_password', value: notifyForm.value.panSouPassword}),
+    axios.post('/api/settings', {name: 'pan_sou_source', value: notifyForm.value.panSouSource}),
+    axios.post('/api/settings', {name: 'pan_sou_channels', value: notifyForm.value.panSouChannels}),
+    axios.post('/api/settings', {name: 'pan_sou_conc', value: notifyForm.value.panSouConc || ''}),
+    axios.post('/api/settings', {name: 'pan_sou_refresh', value: notifyForm.value.panSouRefresh}),
+    axios.post('/api/settings', {name: 'pan_sou_filter_include', value: notifyForm.value.panSouFilterInclude.trim()}),
+    axios.post('/api/settings', {name: 'pan_sou_filter_exclude', value: notifyForm.value.panSouFilterExclude.trim()}),
+    axios.post('/api/settings', {name: 'tg_search', value: notifyForm.value.tgSearch.trim()}),
+    axios.post('/api/settings', {name: 'tg_search_api_key', value: notifyForm.value.tgSearchApiKey.trim()}),
+    axios.post('/api/settings', {name: 'pan_check_url', value: notifyForm.value.panCheckUrl.trim()}),
+    axios.post('/api/settings', {name: 'pan_check_timeout_ms', value: notifyForm.value.panCheckTimeoutMs || ''}),
+    axios.post('/api/settings', {name: 'pan_sou_link_check_enabled', value: notifyForm.value.panSouLinkCheckEnabled}),
+    axios.post('/api/settings', {name: 'pan_sou_link_check_types', value: notifyForm.value.panSouLinkCheckTypes.join(',')}),
+    axios.post('/api/settings', {name: 'pan_sou_link_check_max_count', value: notifyForm.value.panSouLinkCheckMaxCount}),
+  ] : (() => {
+    // 普通用户:仅写个人 TG 渠道与资源筛选偏好({key}:u{uid} 用户级行);空 botToken/chatId = 删除覆盖、回退全局
+    const saves = [
+      axios.put('/api/user-settings/msub_telegram_bot_token', {name: 'msub_telegram_bot_token', value: notifyForm.value.botToken}),
+      axios.put('/api/user-settings/msub_telegram_chat_id', {name: 'msub_telegram_chat_id', value: notifyForm.value.chatId}),
+    ]
+    if (poolFilterValue !== userPoolRaw.value) {
+      saves.push(axios.put('/api/user-settings/msub_pool_filter', {name: 'msub_pool_filter', value: poolFilterValue}))
+    }
+    return saves
+  })()
   notifySaving.value = true
   // tsconfig lib 无 es2020(无 Promise.allSettled),逐项吞错再计数等价实现
   Promise.all(saves.map(p => p.then(() => true, () => false))).then(results => {
@@ -1686,6 +1925,12 @@ const saveNotify = () => {
     notifySaving.value = false
   })
 }
+
+// 同名不同季的订阅(如末日地堡 S3/S4)在列表剧名后补季号区分,只影响展示;
+// 名称本身已带季标记(如"龙之家族 第三季")则不再重复追加
+const NAME_SEASON_MARK = /(第\s*[0-9一二三四五六七八九十]{1,3}\s*季|season\s*\d{1,2}|[Ss]\d{1,2})/i
+const displayName = (row: any) =>
+  row?.season > 1 && !NAME_SEASON_MARK.test(row.name) ? `${row.name} 第${row.season}季` : row?.name
 
 const statusText = (status: string) => {
   switch (status) {
